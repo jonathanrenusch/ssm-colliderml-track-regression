@@ -1,0 +1,161 @@
+# =============================================================================
+# Run A finetune on the run1_unbottleneck_residinit pretrain.
+# AdamW + WSD on p200_core_kf_matched, fp32 encoder.
+# =============================================================================
+# Inherits scaling/base.yaml (auto-loaded by train.py:43-51 because base.yaml
+# lives next to this config). The base already pins pool=ssm_cls, dim=192,
+# encoder_autocast_dtype=float32, output_head_hidden_layers=[256],
+# output_head_init_scale=0.01, input_net_hidden_layers=[192].
+#
+# This config reproduces the four non-trivial quirks of the
+# run1_unbottleneck_residinit pretrain so the optimizer continues into the
+# same architecture it converged on:
+#   1. pool_head un-bottlenecked (state_head_output_dim=384, no hidden, no
+#      dropout) — single Linear(384, 384) projection, kept for symmetry with
+#      ssm_state's fwd_head/bwd_head and not as a capacity bottleneck.
+#   2. encoder.residual_depth_init=true — out_proj rescaled by 1/sqrt(2*N) at
+#      init. Required to load pretrain weights without breaking accumulated
+#      residual variance scaling at depth.
+#   3. Loss weights d0=0.1, phi=0.1, z0=theta=qop=1.0 (de-emphasise the two
+#      params where SSM already dominates CKF; let the trunk learn z0/theta/qop).
+#   4. GradientLoggerCallback with log_output_head_per_dim=true so spikes in
+#      grad/output_head/max_abs are attributable to a specific param.
+#
+# LR schedule mirrors the halved-peak ssmcls_q7_finetune_A_adamw_wsd_fp32.yaml:
+# WSD with decay_pct=0.5 to give the productive decay phase real budget.
+# =============================================================================
+
+trainer:
+  devices: [0, 1]
+  max_epochs: 50
+  precision: 32-true
+  gradient_clip_val: 1.0
+  reload_dataloaders_every_n_epochs: 1
+  benchmark: true
+  logger:
+    class_path: hepattn.utils.loggers.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-Q7-unbottleneck-residinit-A-AdamW-WSD-FP32-finetune
+      project_name: ssm-track-regression
+      offline_directory: logs/comet_offline
+  # Override the whole callbacks list to enable the per-output-dim gradient
+  # logging that run1_unbottleneck_residinit pretrain uses. EarlyStopping
+  # patience is reduced from the scaling base's 50 to 30 to match the
+  # finetune convention.
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 30
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  # TODO: replace with the converged run1_unbottleneck_residinit pretrain
+  # checkpoint once it lands (training is running overnight 2026-04-29).
+  # Set this to the path of your pretrained SSM-CLS checkpoint (produced by
+  # `bash scripts/01_train.sh pretrain_ssm_cls`); leave null to fine-tune from scratch.
+  pretrained_ckpt_path: null
+  optimizer: AdamW
+  lrs_config:
+    schedule: wsd
+    initial: 5.0e-06       # halved from 1e-5
+    max: 5.0e-05           # halved from 1e-4
+    end: 2.5e-06           # halved from 5e-6
+    pct_start: 0.02
+    decay_pct: 0.5         # 50% cosine cooldown
+    weight_decay: 0.02     # Lion-checkpoint-compatible
+    betas: [0.9, 0.95]
+    skip_scheduler: false
+
+  model:
+    init_args:
+      # Quirk 1: un-bottlenecked pool_head (matches pretrain).
+      state_head_output_dim: 128
+      state_head_hidden_layers: [192]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: hepattn.experiments.colliderml_regr.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      # Quirk 3: re-tuned loss weights (d0=0.1, phi=0.1).
+      loss_module:
+        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -2.5
+              norm_max: 2.5
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -200.0
+              norm_max: 200.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 1.0
+              norm_min: -2.0
+              norm_max: 2.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+
+data:
+  preprocessed_dir: ${DATA_ROOT}/p200_core_kf_matched_finetune
+  load_acts: true
+  batch_size: 20000
+  num_workers: 1
+  pin_memory: true
+  streaming: true
+  shard_buffer_size: 50

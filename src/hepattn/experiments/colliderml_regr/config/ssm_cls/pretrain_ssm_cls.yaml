@@ -1,0 +1,136 @@
+# =============================================================================
+# Scaling sweep — Run 1 unbottlenecked + residual-depth init.
+# =============================================================================
+# Architectural sibling of run1_base_fp32.yaml (10 L / dim=192 / d_state=32),
+# diff-only-changes:
+#   1. pool_head un-bottlenecked: state_head_output_dim=2*dim (=384), no
+#      hidden, no dropout. Pool_head becomes a single Linear(384, 384) —
+#      kept for architectural symmetry with the ssm_state path's
+#      fwd_head/bwd_head, removed as a capacity bottleneck. At
+#      encoder_autocast_dtype=float32 the original bf16-impedance-match
+#      role is moot.
+#   2. encoder.residual_depth_init=true — rescale every Mamba2 out_proj.weight
+#      by 1/sqrt(2*num_layers) at init so accumulated residual variance does
+#      not grow with depth. Default-False on the encoder class to preserve
+#      reproducibility on existing checkpoints.
+#   3. Loss weights re-tuned: d0=0.1, phi=0.1, z0=1.0, theta=1.0, qop=1.0
+#      (de-emphasise the two parameters where SSM already dominates CKF;
+#      let the optimiser steer trunk capacity toward z0/theta/qop where
+#      the residual core-resolution gap lives).
+#   4. GradientLoggerCallback: log_output_head_per_dim=true with per-param
+#      slice mapping over the 30-dim Q7 readout, so spikes in
+#      grad/output_head/max_abs can be attributed to a specific output dim
+#      (and parameter) instead of the aggregate.
+#
+# Everything else (input_net, encoder backbone shape, optimizer, schedule,
+# data, BS) is inherited from scaling/base.yaml verbatim.
+# =============================================================================
+trainer:
+  devices: [1]
+  logger:
+    init_args:
+      name: TRK-SSMCLS-scaling-run1-unbottleneck-residinit
+  # Override the whole callbacks list to enable the new per-output-dim
+  # gradient logging in GradientLoggerCallback. All other callbacks copied
+  # verbatim from scaling/base.yaml.
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  model:
+    init_args:
+      # Bottlenecked pool_head: Linear(2*dim, state_head_output_dim) with one
+      # hidden layer. Matches the architecture of the shipped checkpoint
+      # (which the fine-tune triplet warm-starts from).
+      state_head_output_dim: 128
+      state_head_hidden_layers: [192]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: hepattn.experiments.colliderml_regr.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 1.0
+              norm_min: -2.5
+              norm_max: 2.5
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -200.0
+              norm_max: 200.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 1.0
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 10.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 5.0
+              norm_min: -2.0
+              norm_max: 2.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+  # Peak LR pinned for the depth-aware sweep (run1 = baseline, run3 and
+  # run5 scale as 1/sqrt(depth_ratio) from this value).
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false

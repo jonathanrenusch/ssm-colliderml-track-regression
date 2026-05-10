@@ -1,0 +1,171 @@
+# =============================================================================
+# Base config — FP32 + normalisation + new metrics + new callbacks
+# =============================================================================
+# This base is loaded automatically by train.py for every config in this
+# v2/ subfolder (because train.py looks for `base.yaml` next to the chosen
+# config).  Study configs only need to override:
+#   - encoder (architecture-specific)
+#   - loss_module (loss-family-specific)
+#   - optimizer/schedule (pretrain vs finetune)
+#   - data (pretrain: p0_loose_pretrain; finetune: p200_loose_finetune)
+#   - (finetune only) pretrained_ckpt_path
+#
+# Changes vs the original the legacy base.yaml:
+#   - Strict FP32 precision (encoder falls back to bf16 via autocast inside
+#     TrackParameterRegressor.forward — Mamba-2 / flash-attn2 kernels require it).
+#   - `pool` option in the regressor exposes ssm_state / ssm_cls / register_token.
+#   - New IQR/1.349 and RMS metrics on the double-matched subset (added in
+#     model.py; no config changes needed to activate them).
+#   - 18 new configs live in this folder, paired pretrain+finetune.
+# =============================================================================
+
+seed_everything: 42
+
+# ---- Trainer ----------------------------------------------------------------
+
+trainer:
+  max_epochs: 50
+  num_sanity_val_steps: 1
+  accelerator: gpu
+  # Strict FP32 — the heads, loss, and metrics all run in full precision.
+  # The encoder itself is wrapped in bf16 autocast inside the regressor
+  # forward() because Mamba-2 CUDA kernels and flash-attn2 both require bf16/fp16.
+  precision: 32-true
+  log_every_n_steps: 50
+  default_root_dir: logs
+  gradient_clip_val: 1.0
+  enable_progress_bar: true
+  deterministic: false
+  benchmark: true
+  # Reload the train DataLoader each epoch so set_epoch(current_epoch) is
+  # called before workers are forked — required for streaming datasets.
+  reload_dataloaders_every_n_epochs: 1
+
+  logger:
+    class_path: hepattn.utils.loggers.MyCometLogger
+    init_args:
+      name: TRK-base
+      project_name: ssm-track-regression
+      offline_directory: logs/comet_offline
+
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+# ---- Model ------------------------------------------------------------------
+
+model:
+  model:
+    class_path: hepattn.experiments.colliderml_regr.model.TrackParameterRegressor
+    init_args:
+      input_dim: 12
+      dim: 128
+      # Pool must be explicitly set by each study config:
+      #   SSM         (BidirectionalMambaEncoder)       → ssm_state
+      #   SSM-CLS     (BidirectionalMambaCLSEncoder)    → ssm_cls
+      #   Transformer (EncoderWithCLS)                  → register_token
+      encoder_autocast_dtype: bfloat16
+      # Per-direction state projection heads (only consumed when pool == ssm_state)
+      state_head_output_dim: 128
+      state_head_hidden_layers: [192]
+      state_head_dropout: 0.0
+      state_head_activation: SiLU
+      # Final output head (combines projected fwd + bwd → targets)
+      output_head_hidden_layers: [128]
+      output_head_dropout: 0.0
+      output_head_activation: SiLU
+      # Input embedding network
+      input_net_hidden_layers: [128]
+      input_net_dropout: 0.0
+      input_net_activation: SiLU
+      sort_field: s
+      fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      fourier_base: 2
+      # Min-max normalisation bounds (per-hit feature).  Unchanged from the
+      # original base — these are for the raw input features, not the per-track
+      # regression targets (those live in the loss config).
+      norm_min: [-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3]
+      norm_max: [1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3]
+      input_fields:
+        - x
+        - y
+        - z
+        - r
+        - phi_hit
+        - theta_hit
+        - s
+        - volume_id
+        - layer_id
+        - surface_id
+        - detector
+        - eta_hit
+
+      # The encoder and loss_module are architecture/loss-specific and MUST be
+      # overridden by every study config.  The placeholders below are the
+      # current SSM-state defaults so that `ssm_q19_pretrain.yaml` only has to
+      # override what it actually changes.
+      encoder:
+        class_path: hepattn.experiments.colliderml_regr.mamba_state.BidirectionalMambaEncoder
+        init_args:
+          num_layers: 8
+          dim: 128
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+  optimizer: Lion
+
+# ---- Data -------------------------------------------------------------------
+# Pretraining uses p0 (no pileup, ~6x more hard-scatter tracks per event).
+# Finetune configs override this to ${DATA_ROOT}/p200_loose_finetune.
+data:
+  preprocessed_dir: ${DATA_ROOT}/p0_loose_pretrain
+  batch_size: 2048
+  num_workers: 8
+  pin_memory: true
+  num_train_shards: -1
+  # Load ACTS Kalman Filter predictions + the double-matched mask for the
+  # *validation* loader so val-time metrics can compute ssm_precision_dm /
+  # ssm_iqr_dm / ssm_rms_dm on the DM subset.  The train loader is
+  # hard-coded to load_acts=False in data.py:519, so this is free for
+  # training — it only affects val I/O.  Both p0_loose_pretrain and
+  # p200_loose_finetune ship acts_reco.npy + acts_dm_mask.npy.
+  load_acts: true

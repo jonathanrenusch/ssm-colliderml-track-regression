@@ -1,0 +1,104 @@
+# ============================================================================
+# Unified selection configurations for p200 dataset generation
+# ============================================================================
+#
+# Four variants, each used for both pretraining (hard_scatter=true) and
+# fine-tuning (hard_scatter=false).  The hard_scatter flag is toggled at
+# runtime via --selection '{"hard_scatter": true/false}'.
+#
+# Usage with preprocess_colliderml_compact.py:
+#   --selection-file .../selection_p200_datasets.yaml \
+#   --selection-variant loose \
+#   --selection '{"hard_scatter": false}'
+
+# ---------------------------------------------------------------------------
+# 1. Loose — very relaxed cuts, broad phase-space coverage
+# ---------------------------------------------------------------------------
+loose:
+  min_hits: 3
+  max_hits: 20
+  primary: true
+  hard_scatter: true            # overridden at runtime
+  charged: true
+  pt_min: 0.2                   # GeV
+  eta_min: -3.0
+  eta_max: 3.0
+  d0_min: -5.0                  # mm
+  d0_max: 5.0                   # mm
+  z0_min: -200.0                # mm
+  z0_max: 200.0                 # mm
+  require_pixel_strip: false
+  min_pixel_hits: 0
+  min_strip_hits: 0
+  require_acts_dm: false
+  use_acts_hits_only: false
+
+# ---------------------------------------------------------------------------
+# 2. Core — tighter cuts targeting core resolution regime
+# ---------------------------------------------------------------------------
+core:
+  min_hits: 6
+  max_hits: 20
+  primary: true
+  hard_scatter: true
+  charged: true
+  pt_min: 0.5                   # GeV
+  eta_min: -3.0
+  eta_max: 3.0
+  d0_min: -2.5                  # mm
+  d0_max: 2.5                   # mm
+  z0_min: -200.0                # mm
+  z0_max: 200.0                 # mm
+  require_pixel_strip: false
+  min_pixel_hits: 0
+  min_strip_hits: 0
+  require_acts_dm: false
+  use_acts_hits_only: false
+
+# ---------------------------------------------------------------------------
+# 3. Core + KF double-matched — same kinematic cuts as core, but only
+#    tracks that the ACTS Kalman Filter double-matched (purity > 75% AND
+#    efficiency > 75%)
+# ---------------------------------------------------------------------------
+core_kf_matched:
+  min_hits: 6
+  max_hits: 20
+  primary: true
+  hard_scatter: true
+  charged: true
+  pt_min: 0.5                   # GeV
+  eta_min: -3.0
+  eta_max: 3.0
+  d0_min: -2.5                  # mm
+  d0_max: 2.5                   # mm
+  z0_min: -200.0                # mm
+  z0_max: 200.0                 # mm
+  require_pixel_strip: false
+  min_pixel_hits: 0
+  min_strip_hits: 0
+  require_acts_dm: true          # skip non-double-matched tracks
+  use_acts_hits_only: false
+
+# ---------------------------------------------------------------------------
+# 4. Core + KF hits only — same kinematic cuts as core, but uses only
+#    hits that the ACTS KF recovered (from hit_ids) instead of all truth
+#    hits.  Tracks with no ACTS match are skipped entirely.
+# ---------------------------------------------------------------------------
+core_kf_hits:
+  min_hits: 6
+  max_hits: 20
+  primary: true
+  hard_scatter: true
+  charged: true
+  pt_min: 0.5                   # GeV
+  eta_min: -3.0
+  eta_max: 3.0
+  d0_min: -2.5                  # mm
+  d0_max: 2.5                   # mm
+  z0_min: -200.0                # mm
+  z0_max: 200.0                 # mm
+  require_pixel_strip: false
+  min_pixel_hits: 0
+  min_strip_hits: 0
+  require_acts_dm: true          # also require double-matched
+  use_acts_hits_only: true       # use only KF-recovered hits

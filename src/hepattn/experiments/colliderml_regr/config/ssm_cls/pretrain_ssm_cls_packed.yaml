@@ -1,0 +1,126 @@
+# =============================================================================
+# pretrain_ssm_cls_packed — Phase 2 packed-batch pretrain (opt-in).
+# =============================================================================
+# Identical to pretrain_ssm_cls.yaml except `data.packed_batches: true`, which
+# switches the DataLoader to emit packed (1, total_L, D) batches with
+# per-token `seq_idx` and per-track `cu_seqlens`. The SSM-CLS encoder
+# detects this layout and runs its packed forward path (segment-wise flip
+# for the backward Mamba, CLS tokens interleaved at each track boundary).
+#
+# Throughput target: ~1.3-1.5x over the padded baseline at the same
+# batch_size, since padded compute scales with max_L (=20+2 CLS) while
+# packed compute scales with mean_L (~12+2 CLS).
+#
+# **Equivalence to padded mode is exact only for same-length tracks.** For
+# variable-length tracks there is a small numerical divergence because
+# padded mode lets zero-padding tokens contribute non-zero state to the
+# bidirectional Mamba scan, while packed mode cleanly resets at segment
+# boundaries. The packed result is the physically correct one. Run the
+# unit tests under tests/test_packed_equivalence.py to verify equivalence
+# on same-length batches before launching this config.
+# =============================================================================
+trainer:
+  devices: [1]
+  logger:
+    init_args:
+      name: TRK-SSMCLS-scaling-run1-unbottleneck-residinit-PACKED
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  model:
+    init_args:
+      state_head_output_dim: 128
+      state_head_hidden_layers: [192]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: hepattn.experiments.colliderml_regr.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 1.0
+              norm_min: -2.5
+              norm_max: 2.5
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -200.0
+              norm_max: 200.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 1.0
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 10.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 5.0
+              norm_min: -2.0
+              norm_max: 2.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+# Phase 2 opt-in flag: emit packed batches instead of padded.
+data:
+  packed_batches: true

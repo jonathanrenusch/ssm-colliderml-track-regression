@@ -1,0 +1,28 @@
+# Pixi env / build artifacts
+# (note: pixi.lock IS committed — it's the reproducibility lockfile.)
+.pixi/
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Lightning + Comet logs
+logs/
+lightning_logs/
+*.log
+
+# Training run outputs
+checkpoints/
+*.ckpt
+
+# Local scratch / outputs
+scratch/
+out/
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

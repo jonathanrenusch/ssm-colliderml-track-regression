@@ -1,0 +1,124 @@
+# =============================================================================
+# SSM (Mamba-2 state) + Q7 "safety" config — fp32 pretrain on p200_core
+# =============================================================================
+# Exact loss configuration from alt_study4_direct_quantile_eta.yaml:
+#   - 7 quantiles [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+#   - Uniform weights (all 1.0), no qop_tail_weight / qop_scale
+#   - Original (tighter) norm bounds: d0 [-1,1], z0 [-150,150], eta [-3,3], qop [-2,2]
+#   - phi: circular with beta=0.01
+# This is the proven baseline — kept as a safe fallback baseline.
+#
+# Stability: LR rolled back to alt_study4 exact (max 5.0e-05, onecycle, Lion
+# default betas).  GradientSpikeSkip removed — the schedule alone is trusted
+# to keep training stable, and the skip callback was zeroing most updates.
+# =============================================================================
+
+# Pre-trained checkpoint shipped at checkpoints/pretrain_ssm_state/best.ckpt.
+# Pass it to `train.py test --ckpt_path ...` for evaluation; leave null here so
+# `train.py fit` trains from scratch.
+ckpt_path: null
+trainer:
+  devices: [0]
+  max_epochs: 50
+  logger:
+    class_path: hepattn.utils.loggers.MyCometLogger
+    init_args:
+      name: TRK-SSM-Q7-FP32-Core-pretrain
+      project_name: ssm-track-regression
+      offline_directory: logs/comet_offline
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: hepattn.callbacks.SaveConfig
+    - class_path: hepattn.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  model:
+    init_args:
+      pool: ssm_state
+      # Run the SSM encoder in full fp32 (override the bf16 base default).
+      # The Mamba-2 selective-scan fp32 path closes the residual z0/theta/qop
+      # core-resolution gap vs ACTS CKF.
+      encoder_autocast_dtype: float32
+      encoder:
+        class_path: hepattn.experiments.colliderml_regr.mamba_state.BidirectionalMambaEncoder
+        init_args:
+          num_layers: 8
+          dim: 128
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 1.0
+              norm_min: -2.5
+              norm_max: 2.5
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -200.0
+              norm_max: 200.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 1.0
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 10.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 5.0
+              norm_min: -2.0
+              norm_max: 2.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+  optimizer: Lion
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+data:
+  preprocessed_dir: ${DATA_ROOT}/p0_core_pretrain
+  batch_size: 2048
+  num_workers: 8
