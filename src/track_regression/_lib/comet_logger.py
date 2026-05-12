@@ -1,3 +1,5 @@
+"""Largely inspired by / copied from https://github.com/samvanstroud/hepattn."""
+
 import os
 
 from lightning.pytorch.loggers import CometLogger

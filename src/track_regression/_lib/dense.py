@@ -1,3 +1,5 @@
+"""Largely inspired by / copied from https://github.com/samvanstroud/hepattn."""
+
 from torch import Tensor, nn
 
 from track_regression._lib.activation import SwiGLU

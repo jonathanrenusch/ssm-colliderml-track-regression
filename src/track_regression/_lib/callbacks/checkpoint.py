@@ -1,3 +1,5 @@
+"""Largely inspired by / copied from https://github.com/samvanstroud/hepattn."""
+
 from pathlib import Path
 
 from lightning import LightningModule, Trainer

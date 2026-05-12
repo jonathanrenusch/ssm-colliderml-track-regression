@@ -1,3 +1,5 @@
+"""Largely inspired by / copied from https://github.com/samvanstroud/hepattn."""
+
 from torch import Tensor
 from torch.nn.attention.flex_attention import _mask_mod_signature
 

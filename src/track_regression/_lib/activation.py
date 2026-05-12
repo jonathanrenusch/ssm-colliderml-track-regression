@@ -1,3 +1,5 @@
+"""Largely inspired by / copied from https://github.com/samvanstroud/hepattn."""
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
