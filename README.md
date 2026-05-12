@@ -43,7 +43,7 @@ evaluate the models in this repository.
 
 ## Architecture
 
-![Bidirectional Mamba-2 architecture](media/architecture.png)
+<img src="media/architecture.png" alt="Bidirectional Mamba-2 architecture" width="33%">
 
 Vector source: [`media/architecture.pdf`](media/architecture.pdf). The PNG above is a
 300 DPI rasterisation for inline rendering.
@@ -116,7 +116,7 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
 pixi install --locked
 
 # 2. dataset — print the download / preprocess / split commands and run
-#    them. Raw download ~600 GB, preprocessed ~140 GB. Output paths are
+#    them. Raw download ~1.8 TB, preprocessed ~140 GB. Output paths are
 #    hard-coded to /scratch/colliderml/arxiv_retraining/... in the shipped
 #    configs and scripts; edit those if your scratch lives elsewhere.
 bash scripts/00_download_data.sh
@@ -287,7 +287,7 @@ them in lock-step with the configs if your scratch lives elsewhere.
 1. **Download raw parquet shards** from HuggingFace via the `colliderml`
    CLI (installed by `pixi install --locked`). Three physics objects per pileup
    — `particles` (truth), `tracker_hits` (Geant4 silicon measurements),
-   `tracks` (ACTS CKF reconstruction) — totalling ≈ 600 GB. The exact
+   `tracks` (ACTS CKF reconstruction) — totalling ≈ 1.8 TB. The exact
    per-config commands are printed by `scripts/00_download_data.sh`.
 
 2. **Preprocess** — apply the selection in
@@ -327,7 +327,7 @@ them in lock-step with the configs if your scratch lives elsewhere.
    ```
 
 The raw parquets at `/scratch/colliderml/arxiv_retraining/raw/` are no longer needed after step 2
-and can be deleted to reclaim ~600 GB.
+and can be deleted to reclaim ~1.8 TB.
 
 ## Pretraining (1× H100)
 

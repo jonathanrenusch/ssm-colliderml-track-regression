@@ -57,5 +57,5 @@ every run; pass ``--no-split`` if you want to defer that.)
 ==========================================================================
 
 The raw parquets at /scratch/colliderml/arxiv_retraining/raw/ are no longer
-needed once step 2 finishes and can be deleted to free ~600 GB.
+needed once step 2 finishes and can be deleted to free ~1.8 TB.
 EOF
