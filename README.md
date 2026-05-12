@@ -43,7 +43,9 @@ evaluate the models in this repository.
 
 ## Architecture
 
-<img src="media/architecture.png" alt="Bidirectional Mamba-2 architecture" width="33%">
+<p align="center">
+  <img src="media/architecture.png" alt="Bidirectional Mamba-2 architecture" width="66%">
+</p>
 
 Vector source: [`media/architecture.pdf`](media/architecture.pdf). The PNG above is a
 300 DPI rasterisation for inline rendering.
