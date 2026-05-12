@@ -1,0 +1,153 @@
+================================================================================
+  BidirectionalMambaCLSEncoder._forward_packed  —  worked example
+================================================================================
+
+Example batch: B = 3 tracks with lengths [3, 2, 4]  ->  total_L = 9
+              cu_seqlens = [0, 3, 5, 9]
+
+Notation
+--------
+  hSi  = i-th hit of segment S        (the original tokens of x[0])
+  Cb_S = cls_bwd for segment S        (broadcast copy of self.cls_bwd)
+  Cf_S = cls_fwd for segment S        (broadcast copy of self.cls_fwd)
+
+
+--------------------------------------------------------------------------------
+STEP 0.  Input packed layout  x  shape (1, 9, D)
+--------------------------------------------------------------------------------
+
+       pos:  0    1    2    3    4    5    6    7    8
+            +----+----+----+----+----+----+----+----+----+
+       x:   |h00 |h01 |h02 |h10 |h11 |h20 |h21 |h22 |h23 |
+            +----+----+----+----+----+----+----+----+----+
+                 seg 0           seg 1       seg 2
+            <-- L0=3  -->   <- L1=2 ->  <----- L2=4 ---->
+
+       cu_seqlens : 0          3        5              9
+
+
+--------------------------------------------------------------------------------
+STEP 1.  Compute destination positions in the augmented tensor
+         (each segment will gain +2 length:  one Cb on the left, one Cf on the
+          right.  aug_total = total_L + 2*B = 9 + 6 = 15)
+--------------------------------------------------------------------------------
+
+  seg_arange = [0, 1, 2]
+  seq_idx_flat (per original token) :
+      pos        0  1  2  3  4  5  6  7  8
+      seg id  =  0  0  0  1  1  2  2  2  2
+
+  formulas:
+      aug_token_pos     = p        + 2 * seg(p) + 1
+      cls_bwd_pos[s]    = cu[s]    + 2 * s
+      cls_fwd_pos[s]    = cu[s+1]  + 2 * s + 1
+
+  resulting positions:
+      hit positions   :  1, 2, 3,   6, 7,   10, 11, 12, 13
+      Cb positions    :  0,         5,      9
+      Cf positions    :  4,         8,      14
+
+  -> together these are a *permutation* of [0, 15).
+
+
+--------------------------------------------------------------------------------
+STEP 2.  Build x_aug by argsort-based interleave (no scatter, fully diff'able)
+--------------------------------------------------------------------------------
+
+  values    = cat( original hits ,  3*Cb ,  3*Cf )    shape (15, D)
+  positions = cat( [1,2,3,6,7,10,11,12,13] ,
+                   [0,5,9] ,
+                   [4,8,14] )
+  inv_perm  = argsort(positions)
+  x_aug     = values[inv_perm].unsqueeze(0)
+
+  pos:    0    1    2    3    4    5    6    7    8    9   10   11   12   13   14
+        +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+  x_aug:|Cb_0|h00 |h01 |h02 |Cf_0|Cb_1|h10 |h11 |Cf_1|Cb_2|h20 |h21 |h22 |h23 |Cf_2|
+        +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+         \-------- segment 0 --------/ \---- segment 1 ----/ \-------- segment 2 -------/
+
+  aug_cu_seqlens = [0, 5, 9, 15]               (each segment grew by 2)
+  aug_seq_idx    = [0,0,0,0,0, 1,1,1,1, 2,2,2,2,2,2]
+
+
+--------------------------------------------------------------------------------
+STEP 3.  Forward Mamba scan  (reads x_aug left-to-right)
+--------------------------------------------------------------------------------
+
+  Each segment's terminal token *seen last* by the forward scan is its Cf_s:
+
+        seg 0: ... -> h02 -> Cf_0   <-- forward state lands here
+        seg 1: ... -> h11 -> Cf_1
+        seg 2: ... -> h23 -> Cf_2
+
+  seq_idx tells Mamba-2 where to reset hidden state between segments.
+
+
+--------------------------------------------------------------------------------
+STEP 4.  Build segment-wise flip index from aug_cu_seqlens
+         (so the backward Mamba sees each segment reversed, without scrambling
+         neighbouring segments)
+--------------------------------------------------------------------------------
+
+  rule per position p in segment s :
+      new_p = seg_start[s] + seg_end[s] - 1 - p
+            = cu[s]        + cu[s+1]    - 1 - p
+
+  using aug_cu = [0, 5, 9, 15]:
+
+      p :  0  1  2  3  4 | 5  6  7  8 |  9 10 11 12 13 14
+      s :  0  0  0  0  0 | 1  1  1  1 |  2  2  2  2  2  2
+   new_p:  4  3  2  1  0 | 8  7  6  5 | 14 13 12 11 10  9
+
+  Applying flip_indices via gather:
+
+        pos:    0    1    2    3    4    5    6    7    8    9   10   11   12   13   14
+              +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+  x_aug:      |Cb_0|h00 |h01 |h02 |Cf_0|Cb_1|h10 |h11 |Cf_1|Cb_2|h20 |h21 |h22 |h23 |Cf_2|
+              +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+  x_aug_bwd:  |Cf_0|h02 |h01 |h00 |Cb_0|Cf_1|h11 |h10 |Cb_1|Cf_2|h23 |h22 |h21 |h20 |Cb_2|
+              +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+               \-------- segment 0 --------/ \---- segment 1 ----/ \-------- segment 2 -------/
+
+  Now in each segment the Cb_s sits at the *right* end, so the backward Mamba's
+  state lands on Cb_s after seeing every hit -- exactly the mirror of the
+  forward scan landing on Cf_s.
+
+  Key property:  flip_indices is an involution (applying it twice = identity),
+  so the same tensor is used to un-flip the backward output back to the
+  original packed layout before the gated merge.
+
+
+--------------------------------------------------------------------------------
+STEP 5.  Final layer extracts per-direction CLS readouts
+--------------------------------------------------------------------------------
+
+  cls_fwd_out = output[0, cls_fwd_positions, :]   # rows  4,  8, 14
+  cls_bwd_out = output[0, cls_bwd_positions, :]   # rows  0,  5,  9
+
+  -> shape (B, D) each.  Then RMSNorm and concat to (B, 2*D).
+
+
+--------------------------------------------------------------------------------
+STEP 6.  Strip CLS tokens back out of the sequence output
+--------------------------------------------------------------------------------
+
+  x_hits = x_aug[0:1, aug_token_positions, :]
+         = x_aug[0:1, [1,2,3, 6,7, 10,11,12,13], :]
+
+  -> shape (1, 9, D).  Exactly the original packed layout, CLS removed.
+
+
+================================================================================
+  Symmetry summary  --  each index tensor is used TWICE
+================================================================================
+
+  aug_token_positions   :  insert hits into x_aug      |  gather hits back out
+  cls_bwd_positions     :  insert Cb tokens            |  gather Cb readouts
+  cls_fwd_positions     :  insert Cf tokens            |  gather Cf readouts
+  flip_indices (aug_cu) :  pre-scan segment-wise flip  |  post-scan un-flip
+
+  That symmetry is what keeps insertion and extraction consistent and avoids
+  any per-segment Python loop.
+================================================================================

@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from lightning import Callback
 
-from hepattn.utils.cuda_timer import cuda_timer
+from track_regression._lib.cuda_timer import cuda_timer
 
 
 class InferenceTimer(Callback):

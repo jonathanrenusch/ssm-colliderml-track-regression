@@ -5,10 +5,10 @@ module(s) against the bundle's predictions h5.  Use after editing a plot
 module when you don't want to pay the bootstrap cost again.
 
 Usage:
-    python -m hepattn.experiments.colliderml_regr.paper_plots.replot \
+    python -m track_regression.paper_plots.replot \
         --nicename <bundle-dir-name> \
         [--module rms_vs_eta residual_hist target_vs_pred ...] \
-        [--data-dir ${DATA_ROOT}/p200_core_kf_matched_finetune] \
+        [--data-dir /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune] \
         [--output-root ${PAPER_PLOTS_ROOT}]
 """
 from __future__ import annotations

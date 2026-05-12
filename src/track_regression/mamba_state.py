@@ -2,8 +2,8 @@
 
 This module provides wrappers around the Mamba2 SSM that expose the final
 recurrent hidden state from the selective state space model.  The standard
-Mamba2 forward path does not return the SSM state; these wrappers inject
-``return_final_states=True`` into the underlying triton kernels so that
+Mamba2 forward path does not return the SSM state; these wrappers expose
+``return_final_states=True`` from the underlying triton kernels so that
 the state can be used as a learned track summary for downstream regression.
 
 Only the **last encoder layer** should request the state to avoid unnecessary

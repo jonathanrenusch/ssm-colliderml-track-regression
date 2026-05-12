@@ -1,0 +1,324 @@
+================================================================================
+  RegressionPredictionWriter  —  algorithmic walkthrough + HDF5 layout
+================================================================================
+
+Source: src/track_regression/callbacks.py:15
+Consumer: produced .h5 is read by downstream evaluation scripts as flat 1-D
+          (and, for quantile losses, (N, Q)) arrays — one row per test track.
+
+
+--------------------------------------------------------------------------------
+0. Where this callback sits in the Lightning lifecycle
+--------------------------------------------------------------------------------
+
+   trainer.test(model, ckpt_path=...)        (Lightning entry point)
+            |
+            |  ┌─────────────────────────────────────────────────────┐
+            └─►│  Callback.setup(stage="test")                        │  (1)
+               │     • resolve output path                            │
+               │     • open HDF5 file (mode="w")                      │
+               │     • create groups: preds/, targets/, quantiles/?  │
+               │     • record per-parameter quantile τ-levels         │
+               └─────────────────────────────────────────────────────┘
+            |
+            |    for each test batch:
+            |       ┌────────────────────────────────────────────┐
+            |       │  pl_module.test_step(batch)                │
+            |       │     returns {"preds", "targets",           │
+            |       │              "quantile_preds", "loss"}     │
+            |       └────────────────────────────────────────────┘
+            |       ┌────────────────────────────────────────────┐
+            └─────► │  Callback.on_test_batch_end(outputs, ...)  │  (2)
+                    │     • append targets/<p>     (always)      │
+                    │     • append preds/<p>       (if predicted)│
+                    │     • append quantiles/<p>   (if quantile) │
+                    └────────────────────────────────────────────┘
+            |
+            |  ┌──────────────────────────────────────────────────────┐
+            └─►│  Callback.teardown(stage="test")                     │  (3)
+               │     • flush + close HDF5                              │
+               │     • print "Predictions written to <path>"           │
+               └──────────────────────────────────────────────────────┘
+
+The writer only activates when ``stage == "test"`` — fit / validate / predict
+stages early-return immediately in setup() and teardown().
+
+
+--------------------------------------------------------------------------------
+1. setup()  —  path resolution & schema bootstrap
+--------------------------------------------------------------------------------
+
+  STEP 1a.  Find a checkpoint path.
+
+       trainer.ckpt_path   (set by trainer.test(ckpt_path=...))
+            │
+            │   none?
+            ▼
+       scan sys.argv for "--ckpt_path <p>"  or  "--ckpt_path=<p>"
+            │
+            │   still none?
+            ▼
+       fall back to trainer.log_dir / "test_predictions.h5"
+
+       Why the argv fallback exists: when the LightningCLI is constructed,
+       setup() can fire before trainer.ckpt_path is populated.
+
+  STEP 1b.  Derive the output filename.
+
+       ckpt_path  =  logs/<exp>/<run-id>/ckpts/epoch=42.ckpt
+                                                │
+       Path(ckpt_path).parent.parent  ─────────►  logs/<exp>/<run-id>
+       Path(ckpt_path).stem            ─────────►  "epoch=42"
+                                                │
+       output_path =  logs/<exp>/<run-id>/epoch=42__test_predictions.h5
+
+       The .h5 lives next to the ``ckpts/`` folder, NOT inside it, so multiple
+       checkpoints from the same run produce distinct sibling files.
+
+  STEP 1c.  Open the file (mode="w" — truncates any prior file at this path)
+            and create the top-level groups:
+
+                /preds/          (always)
+                /targets/        (always)
+                /quantiles/      (only if at least one loss is QuantileLoss
+                                   or EtaQuantileLoss — see step 1d)
+
+  STEP 1d.  Inspect ``pl_module.model.loss_module`` and record τ-levels:
+
+       for name in loss_module.parameter_order:               # ["d0",...,"qop"]
+           loss_fn = loss_module.losses[name]
+           if isinstance(loss_fn, (QuantileLoss, EtaQuantileLoss)):
+               self._quantile_levels[name] = loss_fn.quantiles  →  np.ndarray (Q,)
+               has_quantiles = True
+
+       NOTE: ``BinnedDFLQuantileOffsetLoss`` and ``GaussianParameterLoss`` are
+       NOT in this isinstance check.  Their ``predict_quantiles()`` outputs
+       still appear in ``outputs["quantile_preds"]`` from test_step, but the
+       writer will not produce a ``quantiles/<p>`` dataset for them because
+       ``name not in self._quantile_levels`` (gate at line 148).  Whether this
+       is intentional or a latent bug should be confirmed before relying on
+       quantile dumps from Gaussian or YOLO-binned losses.
+
+
+--------------------------------------------------------------------------------
+2. on_test_batch_end()  —  per-batch append loop
+--------------------------------------------------------------------------------
+
+  Inputs:
+       outputs["preds"]          : dict[str, Tensor]   point predictions
+       outputs["targets"]        : dict[str, Tensor]   ground truth + extras
+       outputs["quantile_preds"] : dict[str, Tensor] | None
+                                   shape (B,) for point fallbacks,
+                                   shape (B, Q) for quantile losses.
+
+  Loop body  (for each name in ["d0", "z0", "phi", "theta", "qop"]):
+
+       ┌─────────────────────────────────────────────────────────────────┐
+       │  (a) write truth target if available                             │
+       │      if name in targets:                                         │
+       │          t = targets[name].detach().float().cpu().numpy().ravel()│
+       │          _append_1d(file["targets"], name, t)                    │
+       │                                                                  │
+       │      Why "always" even if the model doesn't predict this param:  │
+       │      downstream analyses bin by η = -log tan(θ/2), so theta is   │
+       │      written even for d0-only models.                             │
+       └─────────────────────────────────────────────────────────────────┘
+
+       ┌─────────────────────────────────────────────────────────────────┐
+       │  (b) skip preds if model doesn't emit this parameter             │
+       │      if name not in preds:  continue                             │
+       └─────────────────────────────────────────────────────────────────┘
+
+       ┌─────────────────────────────────────────────────────────────────┐
+       │  (c) write point prediction                                      │
+       │      p = preds[name].detach().float().cpu().numpy().ravel()      │
+       │      _append_1d(file["preds"], name, p)                          │
+       └─────────────────────────────────────────────────────────────────┘
+
+       ┌─────────────────────────────────────────────────────────────────┐
+       │  (d) write quantile predictions if all of:                       │
+       │        • outputs has "quantile_preds"                            │
+       │        • this name is in quantile_preds                          │
+       │        • this name is in self._quantile_levels (step 1d gate)    │
+       │        • q.ndim == 2     (shape (B, Q))                          │
+       │      _append_2d(file["quantiles"], name, q)                      │
+       │                                                                  │
+       │      First write also attaches:  ds.attrs["levels"] = τ-array.   │
+       └─────────────────────────────────────────────────────────────────┘
+
+  Data-flow per parameter, per batch (visual):
+
+       targets[name]   (B,)          ─.float().cpu().numpy().ravel()─►   /targets/<p>   ← appended (B,)
+       preds[name]     (B,)          ─.float().cpu().numpy().ravel()─►   /preds/<p>     ← appended (B,)
+       quantile_preds  (B, Q)        ─.float().cpu().numpy()────────►   /quantiles/<p> ← appended (B, Q)
+
+
+--------------------------------------------------------------------------------
+3. _append_1d / _append_2d  —  growable-dataset mechanics
+--------------------------------------------------------------------------------
+
+  Datasets are created lazily on the FIRST batch that has data for them and
+  resized in place on every subsequent batch.
+
+  _append_1d(grp, name, arr_(B,)) :
+
+       if name not in grp:
+           # first batch — create with unbounded first axis
+           grp.create_dataset(
+               name,
+               data         = arr,
+               maxshape     = (None,),     # ← growable
+               chunks       = True,        # ← let h5py pick chunk shape
+               compression  = "gzip",
+               compression_opts = 1,       # ← lowest gzip level (fast, modest ratio)
+           )
+       else:
+           ds      = grp[name]
+           old_len = ds.shape[0]
+           ds.resize(old_len + len(arr), axis=0)   # ← extend
+           ds[old_len:] = arr                       # ← write new slice
+
+  _append_2d  is identical except:
+       - maxshape = (None, Q)            (Q is fixed from the first batch)
+       - on creation: ds.attrs["levels"] = self._quantile_levels[name]
+
+  Growth pattern over the test run (call N_b = number of batches, B = batch
+  size, N_total = total tracks):
+
+       after batch 1:   ds.shape = (B,)
+       after batch 2:   ds.shape = (2B,)
+       ...
+       after batch k:   ds.shape = (kB,)    (last batch may be shorter)
+       final:           ds.shape = (N_total,)
+
+
+--------------------------------------------------------------------------------
+4. teardown()  —  finalisation
+--------------------------------------------------------------------------------
+
+       if stage == "test" and self.file is not None:
+           self.file.close()        # flushes HDF5 superblock + chunk index
+           self.file = None
+
+       print banner with:
+           "Predictions written to <output_path>"
+           "Quantile predictions included for: <comma-separated names>"   (if any)
+
+
+================================================================================
+  HDF5 FILE STRUCTURE OVERVIEW
+================================================================================
+
+  Path:  <log_dir>/<ckpt_stem>__test_predictions.h5
+         (e.g. logs/colliderml_regr/<run-id>/epoch=42__test_predictions.h5)
+
+  N  = total number of test tracks (sum of batch sizes; one row per track)
+  Q  = number of quantile levels (per parameter; e.g. Q=7 for a 7-quantile head)
+
+  /                                          ← HDF5 root (no root attrs)
+  ├── preds/                                 ← Group: point predictions
+  │     ├── d0       float32  shape (N,)     ← physical-space d0 prediction
+  │     ├── z0       float32  shape (N,)
+  │     ├── phi      float32  shape (N,)
+  │     ├── theta    float32  shape (N,)
+  │     └── qop      float32  shape (N,)
+  │     (only datasets for parameters the model actually predicts are present)
+  │
+  ├── targets/                               ← Group: ground-truth targets
+  │     ├── d0       float32  shape (N,)
+  │     ├── z0       float32  shape (N,)
+  │     ├── phi      float32  shape (N,)
+  │     ├── theta    float32  shape (N,)    ← always written (used for η-bins)
+  │     ├── qop      float32  shape (N,)
+  │     └── ...      any other keys in the targets dict besides these 5 are
+  │                  NOT written by this callback
+  │
+  └── quantiles/                             ← Group: only present if at least
+                                                one loss is QuantileLoss or
+                                                EtaQuantileLoss
+        ├── d0       float32  shape (N, Q)   ← row i = predicted quantile curve
+        │            attrs["levels"] = (Q,) float ndarray of τ values
+        │                              e.g. [0.05, 0.16, 0.25, 0.5, 0.75, 0.84, 0.95]
+        ├── z0       float32  shape (N, Q)
+        │            attrs["levels"] = ...
+        └── ...      (only parameters whose loss was QuantileLoss /
+                      EtaQuantileLoss appear here; see step 1d caveat)
+
+  All datasets are:
+       - dtype       float32           (cast from torch via .float())
+       - chunks      auto-sized by h5py
+       - compression gzip, level 1     (fast / modest ratio)
+       - growable    along axis 0 (maxshape (None,) or (None, Q))
+
+  Row alignment:
+       For any index i in [0, N), the following all refer to the SAME test
+       track (data loader preserves order; batches concatenate in the order
+       on_test_batch_end fires):
+
+           preds/<p>[i]       point prediction
+           targets/<p>[i]     truth
+           quantiles/<p>[i]   quantile curve  (shape (Q,))
+
+       This is the key invariant downstream scripts rely on — do NOT shuffle
+       the test DataLoader.
+
+
+--------------------------------------------------------------------------------
+Worked numerical example
+--------------------------------------------------------------------------------
+
+  Setup:
+       test set size      = 10_000 tracks
+       batch_size         = 2_500
+       parameters         = ["d0", "z0", "phi", "theta", "qop"]
+       loss for d0, z0    = EtaQuantileLoss     (Q = 7)
+       loss for phi/θ/qop = GaussianParameterLoss
+
+  Expected file:
+       /preds/{d0,z0,phi,theta,qop}     each shape (10000,)
+       /targets/{d0,z0,phi,theta,qop}   each shape (10000,)
+       /quantiles/{d0,z0}               each shape (10000, 7)
+              attrs["levels"] = the 7-vector of τ values
+
+       /quantiles/{phi,theta,qop}       NOT present
+              — Gaussian losses' analytic quantiles ARE returned by
+                predict_quantiles() in test_step, but the writer's
+                self._quantile_levels gate (step 1d) excludes Gaussian losses,
+                so they never reach _append_2d.
+
+  Growth trace for /preds/d0 over the 4 batches:
+       after batch 1:   ds.shape = (2500,)
+       after batch 2:   ds.shape = (5000,)
+       after batch 3:   ds.shape = (7500,)
+       after batch 4:   ds.shape = (10000,)
+
+
+--------------------------------------------------------------------------------
+Things to verify if outputs look wrong
+--------------------------------------------------------------------------------
+
+  1. DDP — the writer opens HDF5 in mode "w" with NO rank guard.  Under
+     multi-rank trainer.test() every rank would clobber the same file path
+     (and an HDF5 file is not safe for concurrent writers without MPI-IO).
+     Confirm that test is run single-device, OR add a
+     ``if not trainer.is_global_zero: return`` guard at the top of setup(),
+     on_test_batch_end(), and teardown().
+
+  2. Quantile coverage — Gaussian and BinnedDFLQuantileOffset losses produce
+     full quantile arrays in outputs["quantile_preds"] but the writer's
+     isinstance check in step 1d only captures QuantileLoss / EtaQuantileLoss.
+     If you need quantile dumps for Gaussian / YOLO-binned heads, extend the
+     isinstance tuple.
+
+  3. Row order — confirm the test DataLoader is non-shuffled and uses a
+     stable sampler.  The h5 has no per-row event/track ID, so order IS the
+     identifier.
+
+  4. Per-batch shapes — preds[name] and targets[name] are .ravel()'d before
+     append.  In the current dataloader (see data_*.py), each parameter is
+     shape (B,) so .ravel() is a no-op.  If a future model emits (B, T) with
+     padded tracks, ravel will silently concatenate padding into the .h5;
+     mask first.
+
+  5. File mode is "w" — re-running test on the same checkpoint OVERWRITES
+     any prior dump.  This is usually desired but worth noting.

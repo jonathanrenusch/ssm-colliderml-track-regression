@@ -4,11 +4,11 @@ import torch
 from torch import Tensor, nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 
-from hepattn.flex import relative_position, relative_position_wrapped
-from hepattn.flex.sliding_window import sliding_window_mask, sliding_window_mask_wrapped
-from hepattn.models.attention import Attention, repad_from_flash_varlen, unpad_for_flash_varlen
-from hepattn.models.dense import Dense
-from hepattn.models.norm import NORM_TYPES, get_hybrid_norm_config
+from track_regression._lib.flex import relative_position, relative_position_wrapped
+from track_regression._lib.flex.sliding_window import sliding_window_mask, sliding_window_mask_wrapped
+from track_regression._lib.attention import Attention, repad_from_flash_varlen, unpad_for_flash_varlen
+from track_regression._lib.dense import Dense
+from track_regression._lib.norm import NORM_TYPES, get_hybrid_norm_config
 
 create_block_mask = torch.compile(create_block_mask, dynamic=True)  # ty: ignore[invalid-assignment]
 
@@ -16,22 +16,6 @@ SCORE_MODS = {
     "relative_position": relative_position,
     "relative_position_wrapped": relative_position_wrapped,
 }
-
-
-class DropPath(nn.Module):
-    """Randomly drop layers: https://arxiv.org/abs/1603.09382."""
-
-    def __init__(self, drop_prob: float = 0.0):
-        super().__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x: Tensor) -> Tensor:
-        if self.drop_prob == 0.0 or not self.training:
-            return x
-        keep_prob = 1 - self.drop_prob
-        mask_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-        mask = keep_prob + torch.rand(mask_shape, dtype=x.dtype, device=x.device)
-        return x * mask.floor().div(keep_prob)
 
 
 class LayerScale(nn.Module):
@@ -53,9 +37,8 @@ class Residual(nn.Module):
         norm: str | None,
         post_norm: bool = False,
         layer_scale: float | None = None,
-        drop_path: float = 0.0,
     ) -> None:
-        """Neatly wrap x = x + drop(scale * fn(norm(x))).
+        """Neatly wrap x = x + scale * fn(norm(x)).
 
         Args:
             dim: Dimension of the input and output.
@@ -63,7 +46,6 @@ class Residual(nn.Module):
             norm: The normalization layer.
             post_norm: Whether to apply hybrid norm [2503.04598] style post norm.
             layer_scale: Initial value for the layer_scale. If None, no layer_scale is applied.
-            drop_path: Drop path rate.
 
         Raises:
             ValueError: If the input arguments are invalid.
@@ -79,7 +61,6 @@ class Residual(nn.Module):
 
         self.fn = fn
         self.ls = LayerScale(dim, layer_scale) if layer_scale is not None else nn.Identity()
-        self.dp = DropPath(drop_path) if drop_path else nn.Identity()
         self.post_norm = post_norm
 
         self.norm = NORM_TYPES[norm](dim) if norm else nn.Identity()
@@ -87,8 +68,8 @@ class Residual(nn.Module):
     def forward(self, x: Tensor, **kwargs) -> Tensor:
         if self.post_norm:
             x = self.norm(x)
-            return x + self.dp(self.ls(self.fn(x, **kwargs)))
-        return x + self.dp(self.ls(self.fn(self.norm(x), **kwargs)))
+            return x + self.ls(self.fn(x, **kwargs))
+        return x + self.ls(self.fn(self.norm(x), **kwargs))
 
 
 class EncoderLayer(nn.Module):
@@ -98,7 +79,6 @@ class EncoderLayer(nn.Module):
         depth: int = 0,
         norm: str = "LayerNorm",
         layer_scale: float | None = None,
-        drop_path: float = 0.0,
         value_residual: bool = False,
         qkv_norm: bool = False,
         hybrid_norm: bool = False,
@@ -111,7 +91,6 @@ class EncoderLayer(nn.Module):
             dim: Dimension of the embeddings.
             depth: The depth of the layer.
             norm: The normalization layer.
-            drop_path: Drop path rate.
             layer_scale: Initial layer_scale value.
             value_residual: Whether to apply a residual connection from initial values.
             qkv_norm: Whether to use qkv norm in the Attention layer
@@ -131,7 +110,7 @@ class EncoderLayer(nn.Module):
         attn_kwargs["is_first_layer"] = depth == 0
 
         self.dim = dim
-        residual = partial(Residual, dim=dim, layer_scale=layer_scale, drop_path=drop_path)
+        residual = partial(Residual, dim=dim, layer_scale=layer_scale)
         self.attn = residual(Attention(self.dim, qkv_norm=qkv_norm, norm=norm, **attn_kwargs), norm=attn_norm)
         self.dense = residual(Dense(self.dim, **dense_kwargs), norm=norm, post_norm=dense_post_norm)
 
@@ -284,20 +263,3 @@ class Encoder(nn.Module):
             x = torch.gather(x, -2, x_unsort_idx.unsqueeze(-1).expand_as(x))
 
         return x
-
-
-def change_attn_backends(module: nn.Module, backend: str) -> None:
-    """Recursively change the attention backend of a module and all its children.
-
-    Args:
-        module: The module to update.
-        backend: The attention backend to set.
-    """
-    if isinstance(module, Encoder):
-        module.set_backend(backend)
-        return
-    if isinstance(module, Attention):
-        module.set_backend(backend)
-        return
-    for child in module.children():
-        change_attn_backends(child, backend)

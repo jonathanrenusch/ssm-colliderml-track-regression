@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from hepattn.experiments.colliderml_regr.eval_utils import PARAMS
+from track_regression.eval_utils import PARAMS
 
 from . import PAPER_PLOTS_ROOT
 from .stats import DISPLAY_SCALE, DISPLAY_UNIT

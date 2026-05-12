@@ -53,7 +53,7 @@ except ImportError:
     MAMBA_AVAILABLE = False
     Mamba2 = nn.Module  # type: ignore[assignment, misc]
 
-from hepattn.experiments.colliderml_regr.mamba_state import BidirectionalMambaLayer
+from track_regression.mamba_state import BidirectionalMambaLayer
 
 
 def _segment_flip_indices(cu_seqlens: Tensor, total_len: int) -> Tensor:

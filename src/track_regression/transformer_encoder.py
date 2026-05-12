@@ -1,6 +1,6 @@
 """Transformer encoder baseline with a learned CLS token.
 
-This is a thin wrapper around :class:`hepattn.models.Encoder` that:
+This is a thin wrapper around :class:`track_regression._lib.encoder.Encoder` that:
 
 - Adds a single learned ``cls_token`` at the front of the sequence.
 - Returns ``(sequence_output, cls_tensor)`` instead of just the sequence
@@ -42,7 +42,24 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from hepattn.models.encoder import Encoder
+from track_regression._lib.encoder import Encoder
+
+
+def _fourier_encode_scalar(
+    x: Tensor,
+    fourier_scales: list[int],
+    fourier_base: int,
+) -> Tensor:
+    """Multi-scale Fourier features for a scalar per-token signal.
+
+    Input ``x`` has shape ``(*, 1)``; output ``(*, 2 * len(fourier_scales))``
+    by concatenating ``sin(x / base^n)`` and ``cos(x / base^n)`` over the
+    scale ladder. Kept local to avoid a cross-import of ``model.py``'s
+    ``fourier_encode`` (same formula, scalar-specific signature).
+    """
+    sin = [torch.sin(x / (fourier_base**n)) for n in fourier_scales]
+    cos = [torch.cos(x / (fourier_base**n)) for n in fourier_scales]
+    return torch.cat(sin + cos, dim=-1)
 
 
 class EncoderWithCLS(nn.Module):
@@ -54,8 +71,32 @@ class EncoderWithCLS(nn.Module):
         Model dimension (embedding size).
     cls_init_scale : float
         Standard deviation of the learned CLS token initialisation.
+    num_cls_tokens : int
+        Number of learned CLS tokens prepended to the sequence (e.g. 2
+        for the parameter-matched-to-SSM-CLS baseline).
+    posenc_fourier_scales : list[int] | None
+        Exponent ladder for the Fourier-of-time positional encoding. When
+        non-None **and** ``x_sort_value`` is supplied at forward time, an
+        additive content-derived posenc is computed from the per-hit
+        sort-key value (in this project that's truth time, the on-helix
+        arc-length proxy) and added to the embedded tokens before the
+        CLS tokens are prepended. ``None`` (default) → no posenc, and
+        the transformer remains strictly permutation-invariant in the
+        hits.
+    posenc_fourier_base : int
+        Base for the Fourier ladder (period_i = base^scale_i).
+    posenc_time_scale : float
+        Scalar divisor applied to the time signal before Fourier
+        encoding. Tune so that ``time / posenc_time_scale`` for typical
+        tracks lands in the [0, ~few] range the Fourier basis covers
+        well. The truth-time range on this dataset is roughly 0-45 ns;
+        the default 5.0 puts the bulk of tracks into [0, ~3].
+    posenc_init_scale : float
+        Std-dev of the initial Linear projection of the Fourier features
+        to ``dim``. Small (0.02) so the posenc starts as a perturbation
+        on top of the input embedding and grows under training signal.
     **encoder_kwargs
-        All other kwargs are forwarded to :class:`hepattn.models.Encoder`.
+        All other kwargs are forwarded to :class:`track_regression._lib.encoder.Encoder`.
         ``num_register_tokens`` is silently dropped if present — the CLS
         token is managed at this layer, not by the inner Encoder.
     """
@@ -65,6 +106,14 @@ class EncoderWithCLS(nn.Module):
         dim: int,
         cls_init_scale: float = 0.02,
         num_cls_tokens: int = 1,
+        # Posenc is ON by default — the transformer is otherwise strictly
+        # permutation-invariant in the hits (Fourier encoding of x,y,z,r,…
+        # only conveys per-hit geometry, not on-helix arc length).
+        # Pass ``posenc_fourier_scales: []`` to disable.
+        posenc_fourier_scales: list[int] = (-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5),
+        posenc_fourier_base: int = 2,
+        posenc_time_scale: float = 1.0,
+        posenc_init_scale: float = 0.02,
         **encoder_kwargs: Any,
     ) -> None:
         super().__init__()
@@ -90,6 +139,22 @@ class EncoderWithCLS(nn.Module):
         # Normalising before CLS extraction stabilises the regression head.
         self.final_norm = nn.RMSNorm(dim)
 
+        # ── Content-derived Fourier-of-time positional encoding ─────────────
+        # Disabled if the scales list is empty.
+        self.posenc_fourier_scales = list(posenc_fourier_scales)
+        self.posenc_fourier_base = int(posenc_fourier_base)
+        self.posenc_time_scale = float(posenc_time_scale)
+        if self.posenc_fourier_scales:
+            k = len(self.posenc_fourier_scales)
+            # Linear maps (sin+cos of K scales) → dim. Small init so the
+            # posenc starts as a perturbation on top of the embedded tokens.
+            self.posenc_proj = nn.Linear(2 * k, dim, bias=True)
+            with torch.no_grad():
+                self.posenc_proj.weight.mul_(posenc_init_scale)
+                self.posenc_proj.bias.zero_()
+        else:
+            self.posenc_proj = None
+
     @property
     def pool_dim(self) -> int:
         """Dimension of the concatenated CLS readout: ``num_cls_tokens * dim``."""
@@ -110,7 +175,10 @@ class EncoderWithCLS(nn.Module):
             Input of shape ``(B, N, D)``.
         x_sort_value : Tensor | None
             Values to sort tokens by before encoding (optional).  The CLS
-            token is inserted *after* sorting.
+            token is inserted *after* sorting. In this project the sort
+            key is also the truth time used by the optional posenc, so
+            ``x_sort_value`` doubles as the posenc argument when the
+            posenc is configured.
         kv_mask : Tensor | None
             Boolean mask of shape ``(B, N)``.  ``True`` = valid token,
             ``False`` = padding.  A column of ``True`` is prepended for
@@ -126,6 +194,21 @@ class EncoderWithCLS(nn.Module):
             - ``cls_tensor`` of shape ``(B, D)``.
         """
         B = x.shape[0]
+
+        # Optional content-derived posenc, added BEFORE sort so the
+        # posenc tensor travels with each token through the gather.
+        # Without this the transformer would be permutation-invariant in
+        # the hits — Fourier encoding of x,y,z,... only conveys
+        # geometric coordinate; it does not convey on-helix arc length.
+        # ``x_sort_value`` is the truth time (linear in arc length),
+        # which is the right thing to embed.
+        if self.posenc_proj is not None and x_sort_value is not None:
+            t = (x_sort_value / self.posenc_time_scale).unsqueeze(-1)  # (B, N, 1)
+            pe = _fourier_encode_scalar(
+                t, self.posenc_fourier_scales, self.posenc_fourier_base,
+            )                                                          # (B, N, 2K)
+            pe = self.posenc_proj(pe.to(x.dtype))                      # (B, N, dim)
+            x = x + pe
 
         # Sort first (if requested) — keep track of the sort index so we
         # can un-sort the hit output later.  The inner Encoder is called

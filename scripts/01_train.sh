@@ -5,7 +5,7 @@
 #   bash scripts/01_train.sh <config-stem>
 #
 # Where <config-stem> is the YAML file name without extension under
-# src/hepattn/experiments/colliderml_regr/config/<subdir>/, e.g.
+# src/track_regression/config/<subdir>/, e.g.
 #   pretrain_transformer_1cls
 #   pretrain_transformer_2cls
 #   pretrain_ssm_state
@@ -24,21 +24,16 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
-if [[ -z "${DATA_ROOT:-}" ]]; then
-  echo "ERROR: DATA_ROOT is not set. Run scripts/00_download_data.sh first." >&2
-  exit 1
-fi
-
 STEM="$1"; shift
 
 # Locate the config under config/*/<stem>.yaml.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CFG=$(find "$REPO_ROOT/src/hepattn/experiments/colliderml_regr/config" -name "${STEM}.yaml" -type f | head -1)
+CFG=$(find "$REPO_ROOT/src/track_regression/config" -name "${STEM}.yaml" -type f | head -1)
 
 if [[ -z "$CFG" ]]; then
-  echo "ERROR: no config matching ${STEM}.yaml under src/.../config/" >&2
+  echo "ERROR: no config matching ${STEM}.yaml under src/track_regression/config/" >&2
   exit 1
 fi
 
-cd "$REPO_ROOT/src/hepattn/experiments/colliderml_regr"
+cd "$REPO_ROOT/src/track_regression"
 exec pixi run -e default python train.py fit --config "$CFG" "$@"

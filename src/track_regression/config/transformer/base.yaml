@@ -42,28 +42,28 @@ trainer:
   reload_dataloaders_every_n_epochs: 1
 
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
       name: TRK-base
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
 
   callbacks:
-    - class_path: hepattn.callbacks.InferenceTimer
-    - class_path: hepattn.callbacks.GradientLoggerCallback
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
-    - class_path: hepattn.callbacks.SaveConfig
-    - class_path: hepattn.callbacks.Checkpoint
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
       init_args:
         monitor: val/total
         mode: min
         verbose: true
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
       init_args:
@@ -81,7 +81,7 @@ trainer:
 
 model:
   model:
-    class_path: hepattn.experiments.colliderml_regr.model.TrackParameterRegressor
+    class_path: track_regression.model.TrackParameterRegressor
     init_args:
       input_dim: 12
       dim: 128
@@ -130,7 +130,7 @@ model:
       # current SSM-state defaults so that `ssm_q19_pretrain.yaml` only has to
       # override what it actually changes.
       encoder:
-        class_path: hepattn.experiments.colliderml_regr.mamba_state.BidirectionalMambaEncoder
+        class_path: track_regression.mamba_state.BidirectionalMambaEncoder
         init_args:
           num_layers: 8
           dim: 128
@@ -155,9 +155,9 @@ model:
 
 # ---- Data -------------------------------------------------------------------
 # Pretraining uses p0 (no pileup, ~6x more hard-scatter tracks per event).
-# Finetune configs override this to ${DATA_ROOT}/p200_loose_finetune.
+# Finetune configs override this to /scratch/colliderml/arxiv_retraining/p200_loose_finetune.
 data:
-  preprocessed_dir: ${DATA_ROOT}/p0_loose_pretrain
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_loose_pretrain
   batch_size: 2048
   num_workers: 8
   pin_memory: true

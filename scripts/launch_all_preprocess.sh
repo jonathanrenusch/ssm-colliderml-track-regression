@@ -11,14 +11,14 @@ mkdir -p "$LOGS"
 
 RAW_P0=/eos/project/e/end-to-end-muon-tracking/tracking/colliderml/p0/CERN__ColliderML-Release-1
 RAW_P200=/eos/project/n/ngt2-4/data/ColliderML-Release-1.old/data
-SEL=/shared/tracking/ssm-track-regression/src/hepattn/experiments/colliderml_regr/utils/selection_p200_datasets.yaml
+SEL=/shared/tracking/ssm-track-regression/src/track_regression/selection_p200_datasets.yaml
 
 cd /shared/tracking/ssm-track-regression || exit 1
 
 run() {
     local name=$1; shift
     echo "[$(date +%T)] launching $name → $LOGS/$name.log"
-    nohup pixi run -e default python -m hepattn.experiments.colliderml_regr.scripts.preprocess_colliderml_compact \
+    nohup pixi run -e default python -m track_regression.scripts.preprocess_colliderml_compact \
         "$@" --num-workers 8 \
         > "$LOGS/$name.log" 2>&1 &
     local pid=$!

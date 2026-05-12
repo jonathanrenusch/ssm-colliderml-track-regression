@@ -6,7 +6,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from hepattn.experiments.colliderml_regr.eval_utils import (
+from track_regression.eval_utils import (
     PARAMS,
     load_acts_augmentation,
 )

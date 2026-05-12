@@ -1,0 +1,100 @@
+# =============================================================================
+# Tiny d0 standalone — 3-head range-split classifier + TAIL UPSAMPLING
+# =============================================================================
+# Single-parameter d0 head targeting the "d0 cross" artefact: the network
+# defaults to predicting d0 ~= 0 for any track with non-trivial true d0.
+#
+# Architecture is a 3-head range-split classifier on a single SSM-CLS encoder:
+#   - inner cls head: 24 uniform bins over |d0| <= 30 um (core)
+#   - outer cls head: 420 uniform bins over 30 um < |d0| <= 2.5 mm (tail)
+#   - binary router: routes between core / tail at inference
+# At inference, commit to the inner head only when softmax(router)[inner] > 0.8;
+# otherwise fall back to the outer head (bounded ~30 um error at the edge bin)
+# rather than the inner head (unbounded crushed-to-0 error at the centre bin).
+#
+# Tail upsampling at the DataLoader level: WeightedRandomSampler pulls tracks
+# with |truth d0| > 30 um with weight 19 vs 1 for core, giving a batch-level
+# 50/50 core/tail mix instead of the natural 95/5. Without this, the optimiser
+# cannot escape the beamspot mode — d0 is 95% concentrated within 31 um.
+#
+# Two changes vs a baseline rangesplit run: (a) tail upsampling, (b) inner
+# route threshold 0.8. Both target router bias under 95/5 class imbalance.
+# =============================================================================
+
+trainer:
+  devices: -1
+  max_epochs: 50
+  precision: bf16-mixed
+  logger:
+    init_args:
+      name: TRK-SSMCLS-tinyD0-8L-dim128-rangesplit-upsample19-fromscratch
+
+model:
+  model:
+    init_args:
+      pool: ssm_cls
+      dim: 128
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      output_head_hidden_layers: [128]
+      output_head_init_scale: 0.01
+      encoder_autocast_dtype: bfloat16
+      separate_d0_head: false
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 8
+          dim: 128
+          d_state: 16
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0]
+          config:
+            d0:
+              type: range_split_classification
+              k_inner: 24
+              k_outer: 420
+              inner_half_mm: 0.030
+              outer_half_mm: 2.5
+              split_mm: 0.030
+              weight_router: 1.0
+              weight_inner: 1.0
+              weight_outer: 1.0
+              weight: 1.0
+              # Inference-time asymmetric routing: commit to the inner head
+              # only when softmax(router)[inner] > 0.8. Below that, route to
+              # the outer head so uncertain tracks get bounded ~30 um error
+              # at the outer edge bin instead of unbounded crushed-to-0
+              # error at the inner centre bin.
+              inner_route_threshold: 0.8
+
+  pretrained_ckpt_path: null
+
+  optimizer: Lion
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+data:
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
+  load_acts: true
+  batch_size: 30000
+  num_workers: 1
+  pin_memory: true
+  streaming: true
+  shard_buffer_size: 50
+  tail_upsample_threshold_mm: 0.030
+  tail_upsample_weight: 19.0

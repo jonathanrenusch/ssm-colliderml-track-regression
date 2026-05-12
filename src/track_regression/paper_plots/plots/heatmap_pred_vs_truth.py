@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
 
-from hepattn.experiments.colliderml_regr.eval_utils import (
+from track_regression.eval_utils import (
     FULL_RANGE_PARAMS,
     HEATMAP_RANGE as EVAL_HEATMAP_RANGE,
     PARAMS,

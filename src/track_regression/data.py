@@ -28,8 +28,10 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset, Sampler
 
 
 def _resolve_data_path(p: str | Path) -> Path:
-    """Expand ``${VAR}`` and ``~`` in a path so configs can use $DATA_ROOT."""
-    return Path(os.path.expandvars(os.path.expanduser(str(p))))
+    """Expand ``~`` in a path. Configs ship with absolute paths, but
+    ``expanduser`` is kept for the rare ``~/...`` override on the CLI.
+    """
+    return Path(os.path.expanduser(str(p)))
 
 
 class _StratifiedTailSampler(Sampler[int]):
@@ -678,7 +680,7 @@ class ColliderMLRegrDataModule(LightningDataModule):
 
     def __init__(
         self,
-        preprocessed_dir: str = "${DATA_ROOT}/p0_core_pretrain",
+        preprocessed_dir: str = "/scratch/colliderml/arxiv_retraining/p0_core_pretrain",
         batch_size: int = 256,
         num_workers: int = 8,
         pin_memory: bool = True,

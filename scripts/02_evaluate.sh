@@ -18,14 +18,9 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
-if [[ -z "${DATA_ROOT:-}" ]]; then
-  echo "ERROR: DATA_ROOT is not set." >&2
-  exit 1
-fi
-
 STEM="$1"; shift
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CFG=$(find "$REPO_ROOT/src/hepattn/experiments/colliderml_regr/config" -name "${STEM}.yaml" -type f | head -1)
+CFG=$(find "$REPO_ROOT/src/track_regression/config" -name "${STEM}.yaml" -type f | head -1)
 CKPT="$REPO_ROOT/checkpoints/${STEM}/best.ckpt"
 
 if [[ -z "$CFG" ]]; then echo "ERROR: config $STEM.yaml not found." >&2; exit 1; fi
@@ -34,7 +29,7 @@ if [[ ! -f "$CKPT" ]]; then
   exit 1
 fi
 
-cd "$REPO_ROOT/src/hepattn/experiments/colliderml_regr"
+cd "$REPO_ROOT/src/track_regression"
 exec pixi run -e default python train.py test \
   --config "$CFG" \
   --ckpt_path "$CKPT" \

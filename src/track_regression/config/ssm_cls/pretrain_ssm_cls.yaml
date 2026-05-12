@@ -26,7 +26,7 @@
 # data, BS) is inherited from scaling/base.yaml verbatim.
 # =============================================================================
 trainer:
-  devices: [1]
+  devices: [0]
   logger:
     init_args:
       name: TRK-SSMCLS-scaling-run1-unbottleneck-residinit
@@ -34,8 +34,8 @@ trainer:
   # gradient logging in GradientLoggerCallback. All other callbacks copied
   # verbatim from scaling/base.yaml.
   callbacks:
-    - class_path: hepattn.callbacks.InferenceTimer
-    - class_path: hepattn.callbacks.GradientLoggerCallback
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
@@ -47,16 +47,16 @@ trainer:
           phi: [14, 16]
           theta: [16, 23]
           qop: [23, 30]
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
-    - class_path: hepattn.callbacks.SaveConfig
-    - class_path: hepattn.callbacks.Checkpoint
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
       init_args:
         monitor: val/total
         mode: min
         verbose: true
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
       init_args:
@@ -80,7 +80,7 @@ model:
       state_head_hidden_layers: [192]
       state_head_dropout: 0.0
       encoder:
-        class_path: hepattn.experiments.colliderml_regr.mamba_cls.BidirectionalMambaCLSEncoder
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
         init_args:
           num_layers: 10
           dim: 192
@@ -93,13 +93,13 @@ model:
           norm: RMSNorm
           dropout: 0.0
       loss_module:
-        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        class_path: track_regression.losses.TrackParameterLoss
         init_args:
           parameter_order: [d0, z0, phi, theta, qop]
           config:
             d0:
               type: quantile
-              weight: 1.0
+              weight: 0.1
               norm_min: -2.5
               norm_max: 2.5
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
@@ -111,17 +111,17 @@ model:
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
             phi:
               type: circular
-              weight: 1.0
+              weight: 0.1
               beta: 0.01
             theta:
               type: quantile_eta
-              weight: 10.0
+              weight: 1.0
               norm_min: -3.0
               norm_max: 3.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
             qop:
               type: quantile
-              weight: 5.0
+              weight: 1.0
               norm_min: -2.0
               norm_max: 2.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]

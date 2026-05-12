@@ -1,7 +1,7 @@
 """Unified paper-plot pipeline CLI.
 
 Usage:
-    python -m hepattn.experiments.colliderml_regr.paper_plots.cli \
+    python -m track_regression.paper_plots.cli \
         --run-id 7972d00dcde44bb199bfdf4c870587a5 \
         --nicename ssmcls_q7_p0pretrain_zeroshot_7972d00d_ep49 \
         [--d0-run-id da4a769796454b0f961eb9d3839094a1] \

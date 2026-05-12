@@ -18,30 +18,30 @@
 # when controlling for readout-token count. 
 # =============================================================================
 trainer:
-  devices: [3]
+  devices: [1]
   max_epochs: 50
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
       name: TRK-TXF-Q7-FP32-Core-pretrain-2cls
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
-    - class_path: hepattn.callbacks.InferenceTimer
-    - class_path: hepattn.callbacks.GradientLoggerCallback
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
-    - class_path: hepattn.callbacks.SaveConfig
-    - class_path: hepattn.callbacks.Checkpoint
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
       init_args:
         monitor: val/total
         mode: min
         verbose: true
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
       init_args:
@@ -64,7 +64,7 @@ model:
       output_head_hidden_layers: [256]
       output_head_init_scale: 0.01
       encoder:
-        class_path: hepattn.experiments.colliderml_regr.transformer_encoder.EncoderWithCLS
+        class_path: track_regression.transformer_encoder.EncoderWithCLS
         init_args:
           dim: 192
           num_cls_tokens: 2
@@ -74,19 +74,28 @@ model:
           value_residual: false
           qkv_norm: true
           layer_scale: 1.0e-5
-          drop_path: 0.05
           attn_kwargs:
             num_heads: 6
           dense_kwargs:
             hidden_dim_scale: 4
+          # Content-derived Fourier-of-time positional encoding. The
+          # transformer is otherwise permutation-invariant in the hits
+          # (input-feature Fourier conveys per-hit geometry only, not
+          # arc length). Truth time is the on-helix arc-length proxy
+          # used for shard-level sorting in preprocessing; here it is
+          # also fed in as a posenc. Pass ``posenc_fourier_scales: []``
+          # to disable.
+          posenc_fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+          posenc_fourier_base: 2
+          posenc_time_scale: 1.0     # truth time is in ns; tune to ~p99 if needed
       loss_module:
-        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        class_path: track_regression.losses.TrackParameterLoss
         init_args:
           parameter_order: [d0, z0, phi, theta, qop]
           config:
             d0:
               type: quantile
-              weight: 1.0
+              weight: 0.1
               norm_min: -2.5
               norm_max: 2.5
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
@@ -98,17 +107,17 @@ model:
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
             phi:
               type: circular
-              weight: 1.0
+              weight: 0.1
               beta: 0.01
             theta:
               type: quantile_eta
-              weight: 10.0
+              weight: 1.0
               norm_min: -3.0
               norm_max: 3.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
             qop:
               type: quantile
-              weight: 5.0
+              weight: 1.0
               norm_min: -2.0
               norm_max: 2.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
@@ -123,6 +132,6 @@ model:
     skip_scheduler: false
 
 data:
-  preprocessed_dir: ${DATA_ROOT}/p0_core_pretrain
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
   batch_size: 2048
   num_workers: 8

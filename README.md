@@ -18,7 +18,7 @@ checkpoint into the fine-tune YAML via `pretrained_ckpt_path`.
 
 ## The track-fitting problem
 
-![Track-fitting at HL-LHC](figure_overview.png)
+![Track-fitting at HL-LHC](media/figure_overview.png)
 
 **(a)** Perigee parameters of a charged-particle track in a solenoidal
 magnetic field. The trajectory (orange) is a helix; **r** is the point
@@ -34,16 +34,18 @@ reconstructed from the sparse silicon-detector hit collection.
 *Track finding* assigns hits to candidate trajectories and *track
 fitting* estimates the five perigee parameters of each candidate; this
 work targets the latter, given the hit-to-track assignment. Panel (b)
-is reproduced from the ColliderML dataset paper
-[arXiv:2512.15230](https://arxiv.org/abs/2512.15230) (Elitez et al.,
+is reproduced from the ColliderML dataset paper *ColliderML: The First
+Release of an OpenDataDetector High-Luminosity Physics Benchmark Dataset*
+([arXiv:2512.15230](https://arxiv.org/abs/2512.15230); Elitez,
+Gessinger, Murnane, Raaholt, Salzburger, Skov, Stefl, Zaborowska,
 2025), which also provides the ttbar simulation used to train and
 evaluate the models in this repository.
 
 ## Architecture
 
-![Bidirectional Mamba-2 architecture](architecture.png)
+![Bidirectional Mamba-2 architecture](media/architecture.png)
 
-Vector source: [`architecture.pdf`](architecture.pdf). The PNG above is a
+Vector source: [`media/architecture.pdf`](media/architecture.pdf). The PNG above is a
 300 DPI rasterisation for inline rendering.
 
 A 12-feature per-hit input is sorted along the signed arc length `s` from
@@ -72,24 +74,29 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
 .
 ├── README.md
 ├── LICENSE                          ← GPL-3.0-or-later
-├── architecture.{pdf,png}           ← model diagram
+├── media/architecture.{pdf,png}     ← model diagram (also figure_overview.png)
 ├── pyproject.toml                   ← pixi/hatchling project config
-├── src/hepattn/                     ← library code
-│   ├── models/                      ← attention, encoder, dense, posenc …
-│   ├── callbacks/                   ← Lightning callbacks
-│   ├── utils/                       ← logger, dataset helpers, masks …
-│   └── experiments/colliderml_regr/
-│       ├── train.py                 ← Lightning CLI entry
-│       ├── data.py                  ← memory-mapped dataset
-│       ├── model.py                 ← TrackParameterRegressor LightningModule
-│       ├── losses.py                ← quantile / circular / Gaussian losses
-│       ├── mamba_state.py           ← BidirectionalMambaEncoder (state pool)
-│       ├── mamba_cls.py             ← BidirectionalMambaCLSEncoder (CLS pool)
-│       ├── transformer_encoder.py   ← parameter-matched transformer baseline
-│       ├── paper_plots/             ← publication-quality plot pipeline
-│       ├── scripts/                 ← preprocess + create_split
-│       ├── utils/                   ← selection helpers
-│       └── config/<arch>/<stem>.yaml
+├── src/track_regression/
+│   ├── train.py                     ← Lightning CLI entry
+│   ├── data.py                      ← memory-mapped dataset
+│   ├── model.py                     ← TrackParameterRegressor LightningModule
+│   ├── losses.py                    ← quantile / circular / Gaussian losses
+│   ├── mamba_state.py               ← BidirectionalMambaEncoder (state pool)
+│   ├── mamba_cls.py                 ← BidirectionalMambaCLSEncoder (CLS pool)
+│   ├── transformer_encoder.py       ← parameter-matched transformer baseline
+│   ├── muon.py                      ← Muon (2-D) + AdamW (1-D) hybrid optimizer
+│   ├── eval_utils.py                ← residual / DM / bootstrap helpers
+│   ├── callbacks.py                 ← RegressionPredictionWriter, MinimalGpuMonitor
+│   ├── selection_utils.py           ← named-variant selection loader
+│   ├── selection_p200_datasets.yaml ← preprocessing track-selection variants
+│   ├── paper_plots/                 ← publication-quality plot pipeline
+│   ├── scripts/                     ← preprocess + create_split
+│   ├── config/<arch>/<stem>.yaml
+│   └── _lib/                        ← minimal vendored library bits
+│       ├── encoder.py / dense.py / attention.py / activation.py / norm.py
+│       ├── bert_padding.py / cuda_timer.py / comet_logger.py
+│       ├── flex/                    ← FlexAttention score-mods + masks
+│       └── callbacks/               ← Checkpoint / GradientLogger / InferenceTimer / SaveConfig
 └── scripts/
     ├── 00_download_data.sh
     ├── 01_train.sh CONFIG
@@ -105,9 +112,10 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
 #    Requires nvcc + a CUDA-12.x-compatible GCC.
 pixi install
 
-# 2. dataset — print the download / preprocess / split commands for your
-#    DATA_ROOT and run them. Raw download ~600 GB, preprocessed ~140 GB.
-export DATA_ROOT=/path/to/large/scratch
+# 2. dataset — print the download / preprocess / split commands and run
+#    them. Raw download ~600 GB, preprocessed ~140 GB. Output paths are
+#    hard-coded to /scratch/colliderml/arxiv_retraining/... in the shipped
+#    configs and scripts; edit those if your scratch lives elsewhere.
 bash scripts/00_download_data.sh
 
 # 3. train one or more configs
@@ -142,9 +150,15 @@ the `colliderml` data-fetching CLI.
 
 ```bash
 pixi install                                  # build .pixi/
-export DATA_ROOT=/path/to/data                # required by data scripts
 # optional: export COMET_API_KEY=…            # mirror logs to Comet (offline by default)
 ```
+
+All dataset paths are hard-coded as absolute paths under
+`/scratch/colliderml/arxiv_retraining/...` in the shipped configs and
+scripts (see the `Dataset` section below). If your scratch directory is
+elsewhere, edit the paths in `src/track_regression/config/**/*.yaml`,
+`scripts/00_download_data.sh`, and the per-dataset constants at the top
+of `src/track_regression/scripts/parallel_copy_to_scratch.sh`.
 
 ## Dataset
 
@@ -157,8 +171,8 @@ Two preprocessed variants are needed:
 
 | Variant | Pileup | Tracks | Size | Used by |
 |---|---|---|---|---|
-| `$DATA_ROOT/p0_core_pretrain` | 0 | 71.5 M | ~47 GB | all pretrain configs |
-| `$DATA_ROOT/p200_core_kf_matched_finetune` | 200 | 131 M (DM-only) | ~92 GB | all fine-tune configs **and** evaluation |
+| `/scratch/colliderml/arxiv_retraining/p0_core_pretrain` | 0 | 71.5 M | ~47 GB | all pretrain configs |
+| `/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune` | 200 | 131 M (DM-only) | ~92 GB | all fine-tune configs **and** evaluation |
 
 Selection: `pT ≥ 0.5 GeV`, `|η| ≤ 3`, `|d0| ≤ 2.5 mm`, `min_hits = 6`,
 `max_hits = 20`, `|z0| ≤ 200 mm`, charged primary tracks. The
@@ -166,8 +180,9 @@ Selection: `pT ≥ 0.5 GeV`, `|η| ≤ 3`, `|d0| ≤ 2.5 mm`, `min_hits = 6`,
 (hit-purity > 75 % AND hit-efficiency > 75 %).
 
 Building each variant takes three steps. Run `bash scripts/00_download_data.sh`
-to print the exact commands for your `$DATA_ROOT`, or follow the recipe
-directly:
+to print the exact commands, or follow the recipe directly. All target
+paths are absolute (`/scratch/colliderml/arxiv_retraining/...`); change
+them in lock-step with the configs if your scratch lives elsewhere.
 
 1. **Download raw parquet shards** from HuggingFace via the `colliderml`
    CLI (installed by `pixi install`). Three physics objects per pileup:
@@ -176,10 +191,10 @@ directly:
 
    ```bash
    for cfg in ttbar_pu0_particles ttbar_pu0_tracker_hits ttbar_pu0_tracks; do
-     pixi run -e default colliderml download --config $cfg --out $DATA_ROOT/raw/p0
+     pixi run -e default colliderml download --config $cfg --out /scratch/colliderml/arxiv_retraining/raw/p0
    done
    for cfg in ttbar_pu200_particles ttbar_pu200_tracker_hits ttbar_pu200_tracks; do
-     pixi run -e default colliderml download --config $cfg --out $DATA_ROOT/raw/p200
+     pixi run -e default colliderml download --config $cfg --out /scratch/colliderml/arxiv_retraining/raw/p200
    done
    ```
 
@@ -190,34 +205,36 @@ directly:
    double-matched mask onto every track:
 
    ```bash
-   cd src/hepattn/experiments/colliderml_regr
+   cd src/track_regression
    # pretrain variant (hard scatter only)
-   pixi run -e default python -m hepattn.experiments.colliderml_regr.scripts.preprocess_colliderml_compact \
-       --data-dir   $DATA_ROOT/raw/p0 \
-       --output-dir $DATA_ROOT/p0_core_pretrain \
-       --selection-file utils/selection_p200_datasets.yaml \
+   pixi run -e default python -m track_regression.scripts.preprocess_colliderml_compact \
+       --data-dir   /scratch/colliderml/arxiv_retraining/raw/p0 \
+       --output-dir /scratch/colliderml/arxiv_retraining/p0_core_pretrain \
+       --selection-file selection_p200_datasets.yaml \
        --selection-variant core --selection '{"hard_scatter": true}' \
        --num-workers 8 --augment-acts
    # fine-tune variant (pileup-200, ACTS-DM-required)
-   pixi run -e default python -m hepattn.experiments.colliderml_regr.scripts.preprocess_colliderml_compact \
-       --data-dir   $DATA_ROOT/raw/p200 \
-       --output-dir $DATA_ROOT/p200_core_kf_matched_finetune \
-       --selection-file utils/selection_p200_datasets.yaml \
+   pixi run -e default python -m track_regression.scripts.preprocess_colliderml_compact \
+       --data-dir   /scratch/colliderml/arxiv_retraining/raw/p200 \
+       --output-dir /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune \
+       --selection-file selection_p200_datasets.yaml \
        --selection-variant core_kf_matched --selection '{"hard_scatter": false}' \
        --num-workers 8 --augment-acts
    ```
 
-3. **Split** each variant 90/5/5 train/val/test (writes `split.json`
-   next to the shards):
+3. **Split** is automatic — the preprocessor writes
+   `split.json` (default 90 / 5 / 5 train/val/test) next to the shards
+   at the end of every run. Pass `--no-split` if you want to defer it,
+   or override the ratios with `--train-frac / --val-frac / --test-frac`
+   on the same `preprocess_colliderml_compact` call. To rebuild the split
+   later (e.g. after manually adding shards), call `create_split` directly:
 
    ```bash
-   for d in $DATA_ROOT/p0_core_pretrain $DATA_ROOT/p200_core_kf_matched_finetune; do
-     pixi run -e default python -m hepattn.experiments.colliderml_regr.scripts.create_split \
-         --preprocessed-dir $d
-   done
+   pixi run -e default python -m track_regression.scripts.create_split \
+       --preprocessed-dir /scratch/colliderml/arxiv_retraining/p0_core_pretrain
    ```
 
-The raw parquets at `$DATA_ROOT/raw/` are no longer needed after step 2
+The raw parquets at `/scratch/colliderml/arxiv_retraining/raw/` are no longer needed after step 2
 and can be deleted to reclaim ~600 GB.
 
 ## Pretraining (1× H100)
@@ -247,7 +264,7 @@ user-supplied SSM-CLS pretrain checkpoint via `pretrained_ckpt_path`
 update them before launching:
 
 ```yaml
-# in src/hepattn/experiments/colliderml_regr/config/ssm_cls/finetune_ssm_cls_*.yaml
+# in src/track_regression/config/ssm_cls/finetune_ssm_cls_*.yaml
 model:
   pretrained_ckpt_path: /path/to/your/pretrain_ssm_cls/best.ckpt
 ```
@@ -304,7 +321,7 @@ the configs above whose checkpoints you want to plot.
 ## Configs
 
 ```
-src/hepattn/experiments/colliderml_regr/config/
+src/track_regression/config/
 ├── transformer/
 │   ├── base.yaml                            (auto-loaded by train.py)
 │   ├── pretrain_transformer_1cls.yaml       (1 register token)
@@ -312,12 +329,20 @@ src/hepattn/experiments/colliderml_regr/config/
 ├── ssm/
 │   ├── base.yaml
 │   └── pretrain_ssm_state.yaml              (state-pool readout, fp32 backbone)
-└── ssm_cls/
-    ├── base.yaml
-    ├── pretrain_ssm_cls.yaml                (CLS-pool readout)
-    ├── finetune_ssm_cls_adamw.yaml          (AdamW + WSD)
-    ├── finetune_ssm_cls_lion.yaml           (Lion-continuation + WSD)
-    └── finetune_ssm_cls_muon.yaml           (Muon-hybrid + WSD)
+├── ssm_cls/
+│   ├── base.yaml
+│   ├── pretrain_ssm_cls.yaml                (CLS-pool readout)
+│   ├── finetune_ssm_cls_adamw.yaml          (AdamW + WSD)
+│   ├── finetune_ssm_cls_lion.yaml           (Lion-continuation + WSD)
+│   ├── finetune_ssm_cls_muon.yaml           (Muon-hybrid + WSD)
+│   ├── d0_cross_fix/                        (single-parameter d0-only ablation)
+│   │   ├── base.yaml
+│   │   └── tiny_d0_8L_dim128_rangesplit_upsample.yaml
+│   │                                         (3-head range-split classifier
+│   │                                          + tail-upsampling 19×, targets the
+│   │                                          d0=0 collapse artefact)
+│   └── (additional packed-batch and KF-hits variants for ongoing experimentation)
+└── scaling/                                  (depth-sweep ablations: 2/4/6/8/10 L)
 ```
 
 Naming convention: **`<role>_<backbone>[_<axis>].yaml`** where role ∈
@@ -348,6 +373,19 @@ the architecture-specific fields.
   `gaussian_eta`)** that are not referenced from any shipped config.
   They are kept available for future studies.
 
+## Acknowledgments
+
+Parts of this codebase — most notably the vendored bits under
+`src/track_regression/_lib/` (transformer encoder, dense / attention /
+activation / norm blocks, FlexAttention score-mods, padding helpers,
+and the Lightning callback skeletons) and the overall Lightning-CLI +
+YAML configuration layout — are derived from or inspired by
+[samvanstroud/hepattn](https://github.com/samvanstroud/hepattn). We thank
+Sam van Stroud and the hepattn contributors for releasing that work
+under a permissive license; reusing it let us focus on the SSM
+architecture, loss design, and ablations that are the contribution of
+this repository.
+
 ## Citation
 
 ```bibtex
@@ -358,10 +396,15 @@ the architecture-specific fields.
   url    = {https://github.com/<your-org>/ssm-track-regression}
 }
 
-@misc{Elitez2025ColliderML,
-  title         = {ColliderML: a multi-tasking dataset for AI/ML
-                   in particle physics simulations},
-  author        = {Elitez, Berkin and others},
+@article{Elitez2025ColliderML,
+  title         = {{ColliderML}: The First Release of an
+                   {OpenDataDetector} High-Luminosity Physics
+                   Benchmark Dataset},
+  author        = {Elitez, Do{\u{g}}a and Gessinger, Paul and
+                   Murnane, Daniel and Raaholt, Marcus Selchou and
+                   Salzburger, Andreas and Skov, Stine Kofoed and
+                   Stefl, Andreas and Zaborowska, Anna},
+  journal       = {arXiv preprint arXiv:2512.15230},
   year          = {2025},
   eprint        = {2512.15230},
   archivePrefix = {arXiv},

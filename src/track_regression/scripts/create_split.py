@@ -10,14 +10,14 @@ they actually load.
 Usage::
 
     # Default 90/5/5 split
-    python create_split.py --preprocessed-dir ${DATA_ROOT}/p0_preprocessed
+    python create_split.py --preprocessed-dir /scratch/colliderml/arxiv_retraining/p0_preprocessed
 
     # Custom fractions
-    python create_split.py --preprocessed-dir ${DATA_ROOT}/p0_preprocessed \
+    python create_split.py --preprocessed-dir /scratch/colliderml/arxiv_retraining/p0_preprocessed \
         --train-frac 0.8 --val-frac 0.1 --test-frac 0.1
 
     # Dry run (print only, don't write)
-    python create_split.py --preprocessed-dir ${DATA_ROOT}/p0_preprocessed --dry-run
+    python create_split.py --preprocessed-dir /scratch/colliderml/arxiv_retraining/p0_preprocessed --dry-run
 """
 
 from __future__ import annotations

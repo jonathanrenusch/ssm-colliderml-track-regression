@@ -1,0 +1,156 @@
+# =============================================================================
+# Scaling-study base — depth-only sweep at d_state=16.
+# =============================================================================
+# Auto-loaded by train.py for every leaf in this folder. Near-clone of
+# ssm_cls/base.yaml; the only intentional diff is the encoder default
+# ``d_state: 32 → 16``. Every scaling leaf inherits ``d_state=16`` from
+# here so each leaf only has to override ``num_layers``. Depth ladder:
+# {2, 4, 6, 8, 10} layers — the 10-layer leaf matches the production
+# pretrain_ssm_cls.yaml architecture in every other knob, so the trend
+# can be read off against the production model without a state-dim
+# confound.
+#
+# All other choices (pool=ssm_cls, fp32 encoder, dim=192, headdim=32,
+# chunk_size=16, Lion + OneCycle schedule, p0_core_pretrain dataset)
+# match ssm_cls/base.yaml. Each leaf sets its own ``num_layers`` and a
+# unique trainer.logger.name.
+# =============================================================================
+
+seed_everything: 42
+
+# ---- Trainer ----------------------------------------------------------------
+
+trainer:
+  max_epochs: 50
+  num_sanity_val_steps: 1
+  accelerator: gpu
+  # Strict FP32 at the Lightning level. Encoder precision is controlled
+  # separately via model.model.init_args.encoder_autocast_dtype (float32 here).
+  precision: 32-true
+  log_every_n_steps: 50
+  default_root_dir: logs
+  gradient_clip_val: 1.0
+  enable_progress_bar: true
+  deterministic: false
+  benchmark: true
+  # Reload the train DataLoader each epoch so set_epoch(current_epoch) is
+  # called before workers are forked — required for streaming datasets.
+  reload_dataloaders_every_n_epochs: 1
+
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-depth-scaling-base
+      project_name: ssm-track-regression
+      offline_directory: logs/comet_offline
+
+  callbacks:
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+# ---- Model ------------------------------------------------------------------
+
+model:
+  model:
+    class_path: track_regression.model.TrackParameterRegressor
+    init_args:
+      input_dim: 12
+      dim: 128
+      pool: ssm_cls
+      encoder_autocast_dtype: float32
+      # Final output head (combines the (B, 2·dim) CLS concat → targets).
+      output_head_hidden_layers: [128]
+      output_head_dropout: 0.0
+      output_head_activation: SiLU
+      output_head_init_scale: 0.01
+      # Input embedding network
+      input_net_hidden_layers: [128]
+      input_net_dropout: 0.0
+      input_net_activation: SiLU
+      sort_field: s
+      fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      fourier_base: 2
+      # Min-max normalisation bounds (per-hit feature). Raw input features —
+      # regression-target normalisation lives in the per-parameter loss config.
+      norm_min: [-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3]
+      norm_max: [1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3]
+      input_fields:
+        - x
+        - y
+        - z
+        - r
+        - phi_hit
+        - theta_hit
+        - s
+        - volume_id
+        - layer_id
+        - surface_id
+        - detector
+        - eta_hit
+
+      # Encoder placeholder. Each scaling leaf overrides ``num_layers``;
+      # ``d_state: 16`` is the scaling-study default (vs the ssm_cls/base
+      # default of 32) — see the comment at the top of this file.
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 128
+          d_state: 16
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+
+      # loss_module is run-specific (4-param vs 5-param) and MUST be set in
+      # every study config. No placeholder here to avoid silent dict merges
+      # leaving a d0 entry in 4-param runs.
+
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+  optimizer: Lion
+
+# ---- Data -------------------------------------------------------------------
+data:
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
+  batch_size: 2048
+  num_workers: 8
+  pin_memory: true
+  num_train_shards: -1
+  # Load ACTS KF predictions + DM mask on the val loader so val-time metrics
+  # compute ssm_precision_dm / ssm_iqr_dm / ssm_rms_dm on the DM subset.
+  load_acts: true

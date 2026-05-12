@@ -1,6 +1,6 @@
 from torch import Tensor, nn
 
-from hepattn.models.activation import SwiGLU
+from track_regression._lib.activation import SwiGLU
 
 
 class Dense(nn.Module):

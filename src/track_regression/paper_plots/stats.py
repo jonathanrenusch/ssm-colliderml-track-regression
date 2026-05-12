@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hepattn.experiments.colliderml_regr.eval_utils import (
+from track_regression.eval_utils import (
     PARAMS,
     UNIT_SCALE,
     iterative_rms_convergence,

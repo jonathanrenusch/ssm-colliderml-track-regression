@@ -7,7 +7,7 @@ Usage::
 
     # Override data dir for testing:
     python train.py fit --config config/study1_baseline_l1.yaml \\
-        --data.preprocessed_dir ${DATA_ROOT}/p0_preprocessed_test \\
+        --data.preprocessed_dir /scratch/colliderml/arxiv_retraining/p0_preprocessed_test \\
         --data.num_train_shards 2 --trainer.max_epochs 2
 """
 
@@ -29,8 +29,8 @@ from pathlib import Path
 
 from lightning.pytorch.cli import LightningCLI
 
-from hepattn.experiments.colliderml_regr.data import ColliderMLRegrDataModule
-from hepattn.experiments.colliderml_regr.model import TrackRegressionWrapper
+from track_regression.data import ColliderMLRegrDataModule
+from track_regression.model import TrackRegressionWrapper
 
 
 class CLI(LightningCLI):

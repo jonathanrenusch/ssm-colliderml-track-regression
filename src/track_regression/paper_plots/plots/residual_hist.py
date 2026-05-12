@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 
-from hepattn.experiments.colliderml_regr.eval_utils import (
+from track_regression.eval_utils import (
     PARAMS,
     iterative_rms_convergence,
 )

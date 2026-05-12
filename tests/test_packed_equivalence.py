@@ -30,11 +30,11 @@ import numpy as np
 import pytest
 import torch
 
-from hepattn.experiments.colliderml_regr.data import (
+from track_regression.data import (
     collate_tracks,
     collate_tracks_packed,
 )
-from hepattn.experiments.colliderml_regr.mamba_cls import (
+from track_regression.mamba_cls import (
     _segment_flip_indices,
 )
 
@@ -202,7 +202,7 @@ _REQUIRES_MAMBA_GPU = pytest.mark.skipif(
 
 
 def _build_encoder(num_layers: int = 2, dim: int = 64, chunk_size: int = 16):
-    from hepattn.experiments.colliderml_regr.mamba_cls import (
+    from track_regression.mamba_cls import (
         BidirectionalMambaCLSEncoder,
     )
 

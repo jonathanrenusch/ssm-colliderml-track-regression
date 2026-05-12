@@ -17,8 +17,8 @@ from torch import Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
 
-from hepattn.models.norm import NORM_TYPES
-from hepattn.utils.bert_padding import pad_input, unpad_input
+from track_regression._lib.norm import NORM_TYPES
+from flash_attn.bert_padding import pad_input, unpad_input
 
 ATTN_TYPES = {"torch": scaled_dot_product_attention, "flex": flex_attention, "flash": flash_attn_func, "flash-varlen": flash_attn_varlen_func}
 
@@ -160,7 +160,7 @@ class Attention(nn.Module):
             qkv_norm: Whether to normalize Q, K, V after projection, before attention.
                 Recommended for cross-attention to prevent distribution mismatch between Q and K/V.
             norm: Normalization type to use for QKV normalization (required if qkv_norm=True).
-                Must be one of: LayerNorm, RMSNorm, FastLayerNorm, CustomRMSNorm, SimpleRMSNorm, DyT.
+                Must be one of: LayerNorm, RMSNorm.
             value_residual: Whether to use value residual connections across layers.
             is_first_layer: Whether this is the first layer (for value residual).
 

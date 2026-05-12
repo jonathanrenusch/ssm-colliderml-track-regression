@@ -13,11 +13,6 @@
 # Final aggregator emits LaTeX/CSV tables in $PAPER_PLOTS_ROOT/_summary/.
 set -euo pipefail
 
-if [[ -z "${DATA_ROOT:-}" ]]; then
-  echo "ERROR: DATA_ROOT is not set." >&2
-  exit 1
-fi
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHADOW_ROOT="${COMET_OFFLINE_ROOT:-$REPO_ROOT/logs/comet_offline}"
 export COMET_OFFLINE_ROOT="$SHADOW_ROOT"
@@ -34,7 +29,7 @@ STEMS=(
   finetune_ssm_cls_muon
 )
 
-cd "$REPO_ROOT/src/hepattn/experiments/colliderml_regr"
+cd "$REPO_ROOT/src/track_regression"
 
 for stem in "${STEMS[@]}"; do
   ckpt="$REPO_ROOT/checkpoints/${stem}/best.ckpt"
@@ -55,18 +50,18 @@ for stem in "${STEMS[@]}"; do
   ln -sf "$ckpt" "$rd/ckpts/last.ckpt"
 
   echo "=== $stem ==="
-  pixi run -e default python -m hepattn.experiments.colliderml_regr.paper_plots.cli \
+  pixi run -e default python -m track_regression.paper_plots.cli \
     --run-id "$stem" \
     --nicename "$stem" \
     --output-root "$PAPER_PLOTS_ROOT" \
-    --data-dir "$DATA_ROOT/p200_core_kf_matched_finetune" \
+    --data-dir "/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune" \
     --gpu 0 \
     "$@" || echo "[warn] $stem pipeline exited non-zero; continuing"
 done
 
 # Aggregator runs at end of each cli.py call automatically; one final pass
 # here flushes the cross-run summary tables.
-pixi run -e default python -m hepattn.experiments.colliderml_regr.paper_plots.aggregate || true
+pixi run -e default python -m track_regression.paper_plots.aggregate || true
 
 echo ""
 echo "Done. Summary tables: $PAPER_PLOTS_ROOT/_summary/"

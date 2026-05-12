@@ -11,7 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from hepattn.experiments.colliderml_regr.eval_utils import (
+from track_regression.eval_utils import (
     PARAMS,
     PARAM_VALUE_LABELS,
 )

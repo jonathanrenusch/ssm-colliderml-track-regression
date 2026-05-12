@@ -2,9 +2,9 @@
 
 One CLI invocation per training run produces a self-contained reproducibility
 bundle (config copy, checkpoint symlink, predictions h5, plots in PDF + PNG,
-stats). All output paths are env-var-overrideable; defaults resolve to
-``logs/paper_plots/`` and ``logs/comet_offline/`` relative to the package
-root, with the dataset path read from ``DATA_ROOT``.
+stats). Defaults: paper-plots and comet-offline under the repo root, dataset
+at ``/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune``.
+Both directory roots are env-var-overrideable.
 """
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 
-# Repo root: this file is at src/hepattn/experiments/colliderml_regr/paper_plots/__init__.py
-# so 5 parents up is the package root.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+# Repo root: this file is at src/track_regression/paper_plots/__init__.py
+# so 3 parents up is the repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 PAPER_PLOTS_ROOT = Path(os.environ.get("PAPER_PLOTS_ROOT", _REPO_ROOT / "logs" / "paper_plots"))
-DATA_DIR = Path(os.environ.get("DATA_ROOT", "/data/colliderml")) / "p200_core_kf_matched_finetune"
+DATA_DIR = Path("/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune")
 COMET_OFFLINE_ROOT = Path(os.environ.get("COMET_OFFLINE_ROOT", _REPO_ROOT / "logs" / "comet_offline"))
 
 

@@ -28,14 +28,14 @@ Output structure (per shard)::
 Usage::
 
     python preprocess_colliderml_compact.py \\
-        --data-dir ${DATA_ROOT}/raw \\
-        --output-dir ${DATA_ROOT}/p200_core_kf_matched_finetune \\
+        --data-dir /scratch/colliderml/arxiv_retraining/raw \\
+        --output-dir /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune \\
         --num-shards -1 --num-workers 8 --augment-acts
 
 Quick test (2 shards)::
 
     python preprocess_colliderml_compact.py \\
-        --data-dir ${DATA_ROOT}/raw \\
+        --data-dir /scratch/colliderml/arxiv_retraining/raw \\
         --output-dir /tmp/p200_compact_test \\
         --num-shards 2 --augment-acts
 """
@@ -54,7 +54,7 @@ import numpy as np
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from hepattn.experiments.colliderml_regr.utils.selection_utils import (
+from track_regression.selection_utils import (
     load_selection_variant,
 )
 
@@ -119,7 +119,6 @@ def _safe_save(path: Path, arr: np.ndarray) -> None:
 # Default selection file
 _SELECTION_FILE = (
     Path(__file__).resolve().parent.parent
-    / "utils"
     / "selection_p200_datasets.yaml"
 )
 
@@ -512,7 +511,7 @@ def main():
                         help="Number of shards to process (-1 for all)")
     parser.add_argument("--selection-file", type=str, default=None,
                         help="Path to multi-variant selection YAML "
-                             "(default: utils/selection_p200_datasets.yaml).")
+                             "(default: selection_p200_datasets.yaml in the package root).")
     parser.add_argument("--selection-variant", type=str, default=None,
                         help="Named variant to load from a multi-variant YAML "
                              "(e.g. 'loose', 'core', 'core_kf_matched', 'core_kf_hits')")
@@ -735,7 +734,7 @@ def main():
     elif split_path.exists():
         print(f"\nSplit file already exists, leaving it untouched: {split_path}")
     else:
-        from hepattn.experiments.colliderml_regr.scripts.create_split import create_split
+        from track_regression.scripts.create_split import create_split
 
         print(
             f"\nCreating default train/val/test split "

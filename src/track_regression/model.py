@@ -46,7 +46,7 @@ Data flow
    [x, y, z, r, phi_hit, theta_hit, s, volume_id, layer_id, surface_id, detector, eta_hit]
 2. Min-max normalisation scales each feature to [0, 1].
 3. Fourier encoding expands each feature into multi-scale sin/cos components.
-4. :class:`hepattn.models.Dense` projects Fourier features to dimension ``dim``.
+4. :class:`track_regression._lib.dense.Dense` projects Fourier features to dimension ``dim``.
 5. Encoder (one of the three above) produces sequence output and a pooled
    per-track summary tensor.
 6. A regression head (Dense) maps the pooled summary to the target vector.
@@ -66,10 +66,10 @@ from lightning import LightningModule
 from torch import Tensor, nn
 from torch.optim import AdamW
 
-from hepattn.models.dense import Dense
-from hepattn.experiments.colliderml_regr.losses import MixtureDensityLoss, TrackParameterLoss
-from hepattn.experiments.colliderml_regr.mamba_state import BidirectionalMambaEncoder
-from hepattn.experiments.colliderml_regr.muon import MuonHybrid, split_params_for_muon
+from track_regression._lib.dense import Dense
+from track_regression.losses import MixtureDensityLoss, TrackParameterLoss
+from track_regression.mamba_state import BidirectionalMambaEncoder
+from track_regression.muon import MuonHybrid, split_params_for_muon
 
 
 class _GradScale(torch.autograd.Function):
@@ -741,7 +741,7 @@ class TwinEncoderD0Classifier(nn.Module):
         self.loss_module = loss_module
 
         # Validate the loss is the range-split classifier and extract K_inner / K_outer
-        from hepattn.experiments.colliderml_regr.losses import RangeSplitClassificationLoss
+        from track_regression.losses import RangeSplitClassificationLoss
         if loss_module.parameter_order != ["d0"]:
             raise ValueError(
                 f"TwinEncoderD0Classifier requires parameter_order=['d0']; "

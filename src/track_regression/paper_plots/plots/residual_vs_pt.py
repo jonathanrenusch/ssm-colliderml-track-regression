@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
 
-from hepattn.experiments.colliderml_regr.eval_utils import PARAMS
+from track_regression.eval_utils import PARAMS
 
 from .. import save_fig
 from ..stats import DISPLAY_SCALE, DISPLAY_UNIT

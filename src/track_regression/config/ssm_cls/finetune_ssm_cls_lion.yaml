@@ -16,14 +16,14 @@ trainer:
   reload_dataloaders_every_n_epochs: 1
   benchmark: true
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
       name: TRK-SSMCLS-Q7-unbottleneck-residinit-B-Lion-WSD-FP32-finetune
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
-    - class_path: hepattn.callbacks.InferenceTimer
-    - class_path: hepattn.callbacks.GradientLoggerCallback
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
@@ -35,16 +35,16 @@ trainer:
           phi: [14, 16]
           theta: [16, 23]
           qop: [23, 30]
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.MinimalGpuMonitor
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
-    - class_path: hepattn.callbacks.SaveConfig
-    - class_path: hepattn.callbacks.Checkpoint
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
       init_args:
         monitor: val/total
         mode: min
         verbose: true
-    - class_path: hepattn.experiments.colliderml_regr.callbacks.RegressionPredictionWriter
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
       init_args:
@@ -82,7 +82,7 @@ model:
       state_head_hidden_layers: [192]
       state_head_dropout: 0.0
       encoder:
-        class_path: hepattn.experiments.colliderml_regr.mamba_cls.BidirectionalMambaCLSEncoder
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
         init_args:
           num_layers: 10
           dim: 192
@@ -95,7 +95,7 @@ model:
           norm: RMSNorm
           dropout: 0.0
       loss_module:
-        class_path: hepattn.experiments.colliderml_regr.losses.TrackParameterLoss
+        class_path: track_regression.losses.TrackParameterLoss
         init_args:
           parameter_order: [d0, z0, phi, theta, qop]
           config:
@@ -129,7 +129,7 @@ model:
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
 
 data:
-  preprocessed_dir: ${DATA_ROOT}/p200_core_kf_matched_finetune
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
   load_acts: true
   batch_size: 20000
   num_workers: 1
