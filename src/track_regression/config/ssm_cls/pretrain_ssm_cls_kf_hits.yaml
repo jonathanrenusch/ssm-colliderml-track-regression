@@ -21,10 +21,10 @@
 # isolates the precision cost of the CKF hit-assignment imperfection.
 # =============================================================================
 trainer:
-  devices: [1]
+  devices: [0]
   logger:
     init_args:
-      name: TRK-SSMCLS-scaling-run1-unbottleneck-residinit-KFHITS
+      name: TRK-SSMCLS-pretrain-kfhits
   callbacks:
     - class_path: track_regression._lib.callbacks.InferenceTimer
     - class_path: track_regression._lib.callbacks.GradientLoggerCallback
@@ -65,8 +65,9 @@ trainer:
 model:
   model:
     init_args:
-      state_head_output_dim: 128
-      state_head_hidden_layers: [192]
+      # Unbottlenecked pool_head — matches pretrain_ssm_cls_packed/padded.
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
       state_head_dropout: 0.0
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder

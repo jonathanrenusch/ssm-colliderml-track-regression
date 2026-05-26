@@ -1,0 +1,434 @@
+================================================================================
+PAPER PLOTS — WHAT EACH ONE SHOWS, HOW IT IS BUILT, IS IT SCIENTIFICALLY SOUND
+================================================================================
+
+Code under:   src/track_regression/paper_plots/
+Companion paper: NeurIPS 2026 SSM Tracking ("Bidirectional state space models
+                 for charged-particle trajectory regression"); see README.md.
+Dataset: CERN/ColliderML-Release-1 (ttbar 14 TeV, pu200, ACTS-CKF reco
+         + Geant4 truth on the Open Data Detector). arXiv:2512.15230.
+
+The goal of every plot is the same: compare the five perigee track parameters
+(d0, z0, phi, theta, q/p) predicted by the SSM model against the truth and
+against ACTS's combinatorial Kalman filter (CKF), on tracks where the CKF
+both reconstructed something and matched it to truth at >=75 % hit purity
+*and* >=75 % hit efficiency. That subset is called "double-matched" (DM) and
+has ~6.6 M tracks. SSM and CKF are always scored on the same DM tracks, so
+any difference between them is a difference between fitters, not a difference
+in which tracks were considered.
+
+================================================================================
+0. THE PIPELINE THAT FEEDS THE PLOTS
+================================================================================
+
+The drawing code is tiny; most of the value is in the four "data plumbing"
+modules. They are run in this order by cli.py for every training run:
+
+  inference.py       Make sure test_predictions.h5 exists.
+                     If the user already has a `train.py test` running for
+                     this run, it polls until the h5 lands; otherwise it
+                     spawns one. Pins num_workers=0 (DataLoader fork bug
+                     corrupts gzip h5 chunks).
+
+  bundle.py          Build a reproducibility folder per run with:
+                     config.yaml, metadata.yaml, best.ckpt -> symlink,
+                     test_predictions.h5 -> symlink, plots/, stats.{txt,json}.
+                     Picks the val-best checkpoint (top-k=1) whose matching
+                     h5 actually exists, with sensible fallbacks.
+                     Idempotent — re-running rebuilds the symlinks but does
+                     not touch already-rendered plots.
+
+  predictions.py     Load model preds + truth from the h5.
+                     Load ACTS reco + DM mask from the dataset shards.
+                     Sanity-check lengths (predictions cannot cover more
+                     tracks than ACTS has; partial inference is allowed,
+                     and ACTS is truncated to the matching prefix).
+                     Compute:
+                         ssm_<p>  = pred - truth
+                         ckf_<p>  = acts_reco - truth
+                     Wraps phi residuals into [-pi, pi].
+                     Computes eta = -ln tan(theta_truth / 2)
+                     and pt = sin(theta_truth) / |qop_truth|.
+                     Returns a flat dict res[...] of DM-only arrays.
+
+                     OPTIONAL: --d0-run-id <other_run> overrides the d0
+                     predictions with those from a *different* run. This
+                     supports the headline composite where the d0 branch
+                     comes from the dedicated range-split classifier
+                     trained to fix the d0=0 collapse, while z0/phi/theta/qop
+                     come from the main 5-param model. The override is
+                     gated by an assert that the d0 *targets* match
+                     exactly — catches split mismatches.
+
+  stats.py           Three statistics per param, on SSM, CKF, and the
+                     SSM/CKF ratio:
+                       raw_std            — tail-inclusive RMS (pre-clip)
+                       iqr_robust_sigma   — IQR / 1.349  (robust core sigma,
+                                            no clipping; Gaussian-consistent)
+                       iter3sigma_rms     — iterative 3-sigma-clipped RMS
+                                            (particle-physics "core" RMS,
+                                             capped at 5 passes so heavy
+                                             tails don't collapse to a
+                                             pathologically narrow core)
+                     Each statistic is wrapped in `bootstrap_paired` from
+                     bootstrap.py:
+                       — same random index draws for SSM and CKF (the
+                         ratio is therefore correctly paired, not the
+                         ratio of two independent bootstraps)
+                       — reports (mean, std) of the bootstrap distribution
+                       — the human-readable stats.txt prints mean +/- 2*std
+                         as a "2-sigma (95 % CI under normal-bootstrap
+                         approximation)" band.
+
+  aggregate.py       After every per-run plot pipeline finishes, walks
+                     every <output_root>/<run>/ that has both stats.json
+                     and metadata.yaml, and emits:
+                       _summary/all_runs.{csv,tex}
+                       _summary/ablation_<axis>.{csv,tex}     (axis ∈
+                         pooling / transformer / finetune / scaling /
+                         d0_head / loss_design)
+                     "ablation_axes" is just a list of strings the user
+                     drops into metadata.yaml; aggregate sorts runs into
+                     ablation tables by membership in that list. Empty
+                     tables are still emitted so a downstream LaTeX
+                     \input never breaks.
+
+  replot.py          Convenience entry-point: skip inference and stats,
+                     just re-render selected plot modules against an
+                     existing bundle. Useful when you edited a plot
+                     and don't want to wait for bootstraps again.
+
+================================================================================
+1. THE SEVEN PLOT MODULES (under paper_plots/plots/)
+================================================================================
+
+Every module produces:
+  - one or more "individuals/" PDFs per parameter (5 perigee params); and
+  - a 2x3 "summary" panel where panels 1..5 are the params and panel 6 is
+    the eta step-histogram of the DM test set (so the reader can see what
+    eta range the rest of the figure is averaging over).
+
+Files saved as both PDF (vector, editable text — `pdf.fonttype=42`) and PNG.
+
+--------------------------------------------------------------------------------
+1.1  pt_distribution.py    — `pt_distribution_dm.{pdf,png}`
+--------------------------------------------------------------------------------
+WHAT: one panel. Step histogram of pT for DM tracks, log y, axis 0.5–30 GeV.
+WHY:  context plot. Tells the reader which pT range the resolution numbers
+      were averaged over. The 0.5 GeV lower edge is the kinematic selection
+      cut; the 30 GeV upper cap is where statistics get thin in ttbar.
+
+--------------------------------------------------------------------------------
+1.2  target_vs_pred.py     — `target_vs_pred_summary.{pdf,png}`
+--------------------------------------------------------------------------------
+WHAT: per-parameter overlay of (truth distribution) vs (SSM prediction
+      distribution), filled gray vs blue step. d0 panel uses log y because
+      its tail spans ~3 decades; the other four are linear.
+RANGE: hard-coded to the selection cut bounds — d0 +/- 2.5 mm, z0 +/- 200 mm,
+       phi [-pi, pi], theta [0, pi], q/p [-2, 2].
+WHY:  cheap distribution-shape sanity check. If the model's prediction
+      marginal collapses on the mode of the truth marginal (the classic
+      regression-to-mean failure), it shows up immediately here — most
+      visibly for d0, which is the parameter most prone to that
+      pathology (truth d0 is approximately a Laplacian centred near zero;
+      a poorly-regularised mean-style head learns the mode and you see
+      a spike at zero in the blue curve while the gray curve still has
+      wings). This is what motivated the dedicated d0 range-split head.
+
+--------------------------------------------------------------------------------
+1.3  heatmap_pred_vs_truth.py
+        — `heatmap_pred_vs_truth_summary_ssm.{pdf,png}`
+        — `heatmap_pred_vs_truth_summary_ckf.{pdf,png}`
+--------------------------------------------------------------------------------
+WHAT: 2D log-density histogram of (truth_x, pred_x) for each parameter.
+      Red dashed y = x line for visual reference. Two separate figures,
+      one for SSM, one for CKF, so you can read each fitter's structure
+      independently. Single-param singles also written to individuals/.
+RANGE: d0 -> hard +/- 2.5 mm (matches the kinematic cut).
+       Other params -> 0.5–99.5 percentile of TRUTH only (not pooled with
+       pred). The comment explains the choice: if you pool, a handful of
+       sparse model outliers can drag the axis wide and the dense ridge
+       looks shrunken. Truth-only honours the physical envelope.
+WHY:  the most direct visual check. A working fitter is a diagonal stripe.
+      A collapse is a horizontal band at zero. A miscalibrated quantile
+      head with a too-tight prior is a flattened ridge that doesn't hit
+      the corners. The d0 panel is the diagnostic that motivated the
+      range-split head — see results.tex, "mode attraction on d0".
+
+--------------------------------------------------------------------------------
+1.4  residual_hist.py — 4 variants (linear/log y x preclip/postclip)
+        — `residual_hist_summary_linear_preclip.{pdf,png}`
+        — `residual_hist_summary_linear_postclip.{pdf,png}`
+        — `residual_hist_summary_logy_preclip.{pdf,png}`
+        — `residual_hist_summary_logy_postclip.{pdf,png}`
+--------------------------------------------------------------------------------
+WHAT: per-param 1D histogram of the residual (pred - truth), two curves:
+      red = CKF, blue = SSM. Absolute counts (no density normalisation, so
+      the y-axis IS the number of tracks per bin). Vertical dashed line at
+      Δ=0. Phi residuals are already wrapped to [-pi, pi] upstream.
+RANGE:
+  linear y: inner 95 % of pooled (SSM+CKF) -> 2.5-97.5 percentile.
+            Needed for the core shape to be visible.
+  log y:    inner 99.9 % of pooled -> 0.05-99.95 percentile.
+            Cuts the literal handful of extreme outliers and keeps the
+            full sub-percent tail visible.
+  postclip variants: apply iter-3sigma per-fitter first, then rebin.
+                     SSM and CKF therefore use *different* clipping cuts.
+WHY:  this is the figure that lets a particle-physics reader compare two
+      resolutions visually. Width of the core = sigma. Asymmetry of the
+      tails = fitter pathology (CKF underestimates non-Gaussian tails by
+      design; SSM trained with quantile loss can in principle absorb them).
+      The log-y pre-clip variant is the one that drives the headline
+      qualitative claim "SSM has lighter tails than CKF".
+
+--------------------------------------------------------------------------------
+1.5  residual_vs_pt.py — 4 summary panels per model (lin/log pT x SSM/CKF)
+        — `residual_vs_pt_summary_logpt_ssm.{pdf,png}`
+        — `residual_vs_pt_summary_logpt_ckf.{pdf,png}`
+        — `residual_vs_pt_summary_linpt_ssm.{pdf,png}`
+        — `residual_vs_pt_summary_linpt_ckf.{pdf,png}`
+--------------------------------------------------------------------------------
+WHAT: 2D heatmap. x = pT (0.5–30 GeV, log or linear). y = residual,
+      windowed to the inner 95 % per-panel (or shared across SSM/CKF for
+      the side-by-side singles in individuals/). Cell colour = absolute
+      counts on a log scale. Red dashed Δ=0 reference.
+WHY:  resolves the resolution number into the kinematic axis where the
+      physics actually changes. At low pT the residual budget is dominated
+      by multiple scattering (~1/pT), so the residual band fans out as pT
+      drops; at high pT the residual is dominated by detector resolution
+      and the band gets narrow. A working fitter is a horizontal stripe
+      that widens to the left. A bias appears as a tilt away from y = 0.
+      Note: the SSM/CKF singles in individuals/ share a y-window locked
+      to the SSM inner 95 % so they can be pasted side-by-side in the
+      paper; CKF tails outside that window are deliberately clipped off
+      the figure (documented in the comments as the "intended visual" for
+      the tail-suppression claim).
+
+--------------------------------------------------------------------------------
+1.6  rms_vs_eta.py — the headline figure
+        — `rms_vs_eta_summary.{pdf,png}`           (both pre + post 3sigma)
+        — `rms_vs_eta_summary_preclip.{pdf,png}`   (tail-inclusive only)
+        — `rms_vs_eta_summary_postclip.{pdf,png}`  (core only — paper Fig.)
+--------------------------------------------------------------------------------
+WHAT: per-parameter RMS as a function of pseudorapidity. eta binning:
+      30 equal-width bins, dEta = 0.2, eta in [-3, 3]. Inside every bin:
+      - SSM line + CKF line in blue / red
+      - iter-3sigma (solid) and/or pre-clip (dashed) variants
+      - bootstrap 2-sigma band shaded around each line (n_boot=50 per
+        bin; at N ~ 6.6 M these bands collapse onto the line — that is
+        the point. The numerics under the legend give the unbinned
+        full-DM mean +/- bootstrap 2sigma so the reader still sees a
+        number for the global resolution.)
+      - per-bin sample-size guard: bins with <30 tracks are skipped.
+WHY:  the central scientific claim of the paper. It tells you both
+      "is the core resolution comparable across eta" (post-clip lines)
+      and "what is the contribution of non-Gaussian tails as a function
+      of how much detector material the track crosses" (pre vs post gap
+      grows at large |eta|, where tracks cross more material and the
+      multiple-scattering tail dominates).
+
+================================================================================
+2. THREE STATISTICS — WHY ALL THREE
+================================================================================
+
+Every per-parameter number is reported through THREE different lenses:
+
+  raw_std          (pre-clip)   - tail-inclusive RMS. Sensitive to outliers.
+                                  Answers: "does the SSM pull in the
+                                  non-Gaussian tails the CKF can't model?"
+
+  iqr / 1.349      (no clip)    - the robust core sigma a statistician
+                                  reaches for. No iterative loop, just the
+                                  IQR. Insensitive to tails by construction
+                                  (Q_25 and Q_75 ignore everything outside
+                                  the middle 50 %). Gaussian-consistent
+                                  with the analytic factor 1.349 = 2*z_0.75.
+                                  Answers: "is the core sharper".
+
+  iter-3sigma RMS  (post-clip)  - the particle-physics "core resolution"
+                                  standard (ATLAS/CMS tracker TDRs).
+                                  Iteratively clips to mean +/- 3*RMS for
+                                  up to 5 passes, then reports the RMS of
+                                  the surviving sample.
+                                  Answers: "is the Gaussian core sharper",
+                                  matched to what every previous tracking
+                                  paper has reported.
+
+The IQR is the "outside-HEP cross-check" — it agrees with iter-3sigma when
+the distribution is approximately Gaussian, disagrees when it isn't, and
+disagreement *with itself* is informative.
+
+================================================================================
+3. SCIENTIFIC SOUNDNESS — A LINE-BY-LINE AUDIT
+================================================================================
+
+What is correct and well-justified:
+
+  + DM restriction is applied uniformly. Both fitters are scored on the
+    same physical track set, so any SSM/CKF gap is between FITTERS, not
+    between different track populations.
+
+  + Phi residuals are wrapped to [-pi, pi] BEFORE any statistic is
+    computed — predictions.py line 16, _wrap. Without this, every phi
+    residual statistic would be inflated by occasional wrap-around hits.
+
+  + The bootstrap is PAIRED — same resample indices for SSM and CKF —
+    so ratios SSM/CKF inherit the right correlation. This matters: a
+    naive ratio of two independent bootstraps overstates the ratio
+    uncertainty because the two estimators see the same physics events.
+    (bootstrap.py, `bootstrap_paired`.)
+
+  + Iter-3sigma is intentionally CAPPED at 5 passes. Comment in
+    eval_utils.py says: "deep iteration collapses heavy-tailed
+    distributions to their detector core and erases eta-dependent
+    structure, which isn't what we want here." This is the right call
+    for a paper that wants to *show* the tail structure as well as the
+    core resolution.
+
+  + Three statistics, not one. Headline number (iter-3sigma) is
+    cross-checked by IQR/1.349 and by raw std; the rms_vs_eta plot can
+    be drawn pre-clip and post-clip simultaneously. A reader who
+    distrusts iterative clipping can read the IQR column.
+
+  + The CLS-vs-truth d0 collapse is *visible* in the heatmap and
+    *visible* in target_vs_pred. The two plots, viewed together,
+    establish the diagnostic that motivated the dedicated d0 range-split
+    head. The optional --d0-run-id swap in predictions.py lets the
+    paper compose the best-of-both prediction without re-training.
+
+  + Range choices for plots are documented in the source comments, with
+    the alternative considered and rejected (e.g. truth-only percentile
+    in heatmap_pred_vs_truth.py vs pooled — pooling was tried and
+    rejected because sparse model outliers collapsed the dense ridge).
+
+  + Units conversion is one-place (DISPLAY_SCALE / DISPLAY_UNIT in
+    stats.py) and the tables, the rms_vs_eta legend, and the residual
+    histograms all pull from it — so a unit-change is a one-line edit
+    and the tables/plots cannot drift.
+
+  + n_kept counts are explicitly tracked: rms_vs_eta legend shows
+    different N for pre-clip vs iter-3sigma curves. The reader is
+    never silently shown a curve from <100 % of the sample.
+
+What is worth knowing / minor friction:
+
+  - Bootstrap normality assumption.
+    stats.py prints "mean +/- 2*std" of the bootstrap distribution and
+    calls it 95 % CI. This is the normal-CI form; the paper text
+    (metrics.tex line 47) calls it "1000-replicate non-parametric
+    percentile-bootstrap 2sigma CI". These differ in principle but
+    agree numerically when the bootstrap distribution is approximately
+    Gaussian, which it is at N=6.6 M. Two follow-ups would close the
+    loop completely:
+      (a) report the bootstrap distribution's 2.5/97.5 percentiles
+          (true percentile-bootstrap) instead of mean +/- 2*sigma; OR
+      (b) reword the paper to say "normal-approximation bootstrap CI"
+          rather than "percentile-bootstrap CI".
+
+  - Bootstrap replicate count.
+    cli.py defaults to --bootstrap-n 200 for stats and n_boot=50 for
+    rms_vs_eta bands. The paper says 1000 replicates. At N=6.6 M the
+    difference is invisible (already deep in the regime where the
+    bootstrap distribution is collapsed onto its mean), but for tighter
+    consistency you can run with `--bootstrap-n 1000`.
+
+  - rms_vs_eta seeds differ across SSM/CKF lines.
+    seed=11..14 in _draw_one — different draws are used for SSM and CKF
+    bands. Independent bands are fine here because the figure plots
+    them as separate lines (no ratio displayed). The paired bootstrap
+    used for ratios is correctly seeded elsewhere (stats.py /
+    bootstrap_paired). Worth noting if you ever want to add an
+    SSM/CKF ratio panel here, you would need to switch to paired
+    draws first.
+
+  - residual_vs_pt individuals share a y-window locked to SSM's inner
+    95 %.
+    Documented as the "intended visual" (the SSM-vs-CKF tail
+    suppression argument). Be aware that the CKF singles will look
+    truncated. The summary panels do NOT enforce this: each panel
+    auto-fits its own inner 95 %.
+
+  - Heatmap "truth-only" axis range.
+    Sensible (avoids the dense ridge being squashed by sparse model
+    outliers), but does hide where the model overshoots the kinematic
+    envelope. The pred-vs-truth heatmap is therefore *not* a diagnostic
+    for outliers — the residual histograms and the residual-vs-pT
+    heatmaps are.
+
+  - residual_hist post-clip variant uses different cuts for SSM and
+    CKF.
+    Each is clipped to its own iter-3sigma. The bin range is the inner
+    99.9 % of the pooled (already-clipped) data. This is the right
+    thing if the question is "what shape is the core of each", but the
+    reader should not subtract the two histograms by eye and call it
+    a difference (different windows). The numbers in stats.txt are the
+    correct way to subtract.
+
+  - iter-3sigma is capped at 5 passes (documented). Other tracking
+    papers iterate to convergence. The fixed cap is *more conservative*
+    on heavy tails (does not collapse them) and is consistent with the
+    paper text in app:metrics-extras — verify when you publish.
+
+  - The d0-override branch in predictions.py asserts that the d0
+    *targets* match between the main run and the override run. This
+    catches train/val/test split mismatches. It does NOT catch the
+    case where the override checkpoint was tested with a different
+    DM mask (e.g. trained on a subset). Today the DM mask comes from
+    the dataset, not from the run, so this is safe; if a future
+    config introduces per-run DM filtering, this check needs to grow.
+
+  - aggregate.py KNOWN_AXES is a hard-coded list of ablation axes
+    used to slice the cross-run summary tables. The aggregator silently
+    ignores any axis in a run's metadata.yaml that is not in this list.
+    If you add a new ablation axis to a config, remember to add it to
+    KNOWN_AXES (aggregate.py line 23) or the cross-run table will not
+    pick it up.
+
+What is sensitive to the upstream pipeline (not in paper_plots itself,
+but worth knowing because it affects every plot):
+
+  + The DM subset is taken from the dataset's ACTS sidecar
+    (`acts_dm_mask.npy`), produced at preprocessing time with the
+    hit-purity > 75 % AND hit-efficiency > 75 % criterion (see
+    selection_p200_datasets.yaml `core_kf_matched`). All plots inherit
+    this definition. A change to the cut would change every number in
+    every plot — make sure the cut documented in the paper matches
+    the cut compiled into the preprocessed dataset.
+
+  + The hits the SSM sees are TRUTH-MATCHED hits (the dataset's CSR
+    layout stores only the hits belonging to selected tracks). The
+    CKF sees the full event. This asymmetry is discussed in
+    sections/metrics.tex "Truth-matching asymmetry" — the DM
+    restriction is the mitigation. The paper plots themselves do not
+    re-introduce any asymmetry.
+
+  + The fp32-vs-bf16 encoder inference choice (encoder_autocast_dtype
+    in the YAML) materially changes the SSM core resolution on z0 /
+    theta / qop (Mamba-2 selective-scan kernel has a bf16 round-off
+    ceiling on long-range integrated parameters). Every shipped
+    fine-tune config now sets float32 — verify any new finetune YAML
+    you add does the same before plotting headline numbers.
+
+================================================================================
+4. ONE-LINE TAKEAWAY PER PLOT
+================================================================================
+
+pt_distribution_dm            "what kinematic regime are we averaging over"
+target_vs_pred_summary        "does the SSM marginal match the truth marginal"
+heatmap_pred_vs_truth_summary "is each fitter a diagonal stripe"
+residual_hist_summary         "are the core widths and tail shapes comparable"
+residual_vs_pt_summary        "does residual structure scale with pT correctly"
+rms_vs_eta_summary            "the headline: detector-vs-detector core sigma
+                               as a function of pseudorapidity, two fitters
+                               on the same physical tracks, with bootstrap
+                               error bands"
+stats.txt / all_runs.tex      "the same answers as numbers, with paired
+                               SSM/CKF ratios and 2-sigma error bars,
+                               LaTeX-paste-ready"
+
+The plots are scientifically sound for the qualitative comparison the paper
+is making. The two consistency items worth tightening before submission are
+(i) reconcile "normal-CI" vs "percentile-CI" wording between code and paper
+metrics.tex, and (ii) run the final headline pass with --bootstrap-n 1000
+to match the paper's stated replicate count. Everything else is documented,
+defensible, and reproducible from a single CLI invocation per run.

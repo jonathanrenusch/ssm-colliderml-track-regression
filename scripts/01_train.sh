@@ -14,7 +14,7 @@
 #   finetune_ssm_cls_lion
 #   finetune_ssm_cls_muon
 #
-# Pretraining uses 1 GPU; fine-tuning uses 4 GPU DDP. Configs encode this
+# Pretraining uses 1 GPU; fine-tuning uses 2 GPU DDP. Configs encode this
 # via `trainer.devices`. Override on the CLI if your hardware differs:
 #   bash scripts/01_train.sh pretrain_ssm_cls --trainer.devices 1
 set -euo pipefail

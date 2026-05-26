@@ -324,7 +324,15 @@ def iterative_rms_convergence(
     n_sigma: float = 3.0,
     max_iter: int = 5,
 ) -> dict:
-    """Iteratively clip residuals to mean ± n_sigma*RMS for a fixed number of passes.
+    """Iteratively clip residuals to mean ± n_sigma*sigma for a fixed number of passes.
+
+    The cut window uses sigma = np.std (mean-centred spread), which is the
+    natural meaning of "3 sigma from the mean" for the clipping step. The
+    returned ``"rms"`` is the true RMSE of the converged set,
+    ``sqrt(mean(x**2))`` — sensitive to both spread *and* bias, matching the
+    ML-community RMSE convention. For an unbiased estimator RMSE = sigma; for
+    a biased one RMSE = sqrt(sigma**2 + mean**2), so a bias collapse like the
+    d0 cross surfaces in this metric instead of being hidden.
 
     Capped at ``max_iter=5`` passes (ATLAS-style but limited): deep iteration
     collapses heavy-tailed distributions to their detector core and erases
@@ -338,9 +346,9 @@ def iterative_rms_convergence(
 
     for n_iter in range(1, max_iter + 1):
         mean = float(np.mean(data))
-        rms = float(np.std(data))
-        cut_lo = mean - n_sigma * rms
-        cut_hi = mean + n_sigma * rms
+        sigma = float(np.std(data))
+        cut_lo = mean - n_sigma * sigma
+        cut_hi = mean + n_sigma * sigma
         mask = (data >= cut_lo) & (data <= cut_hi)
         n_kept = int(np.sum(mask))
         if n_kept == prev_n:
@@ -350,7 +358,8 @@ def iterative_rms_convergence(
 
     return {
         "mean": float(np.mean(data)),
-        "rms": float(np.std(data)),
+        "rms": float(np.sqrt(np.mean(data ** 2))),
+        "sigma": float(np.std(data)),
         "n_kept": len(data),
         "n_total": len(residuals),
         "cut_lo": cut_lo,
@@ -468,7 +477,10 @@ def compute_precision_vs_eta_iterative(
     unbinned_cuts: dict[str, dict] = {}
 
     conv_fn = iterative_rms_convergence if method == "iterative_rms" else iterative_gaussfit_convergence
-    sigma_key = "rms" if method == "iterative_rms" else "sigma"
+    # "iterative_rms" returns RMSE = sqrt(mean(x²)) (bias-sensitive,
+    # ML-community convention); "iterative_gaussfit" returns σ from the
+    # Gaussian fit. Both are reported as the per-bin "precision".
+    metric_key = "rms" if method == "iterative_rms" else "sigma"
     min_tracks = 30  # need enough statistics for iterative methods
 
     for name in PARAMS:
@@ -476,7 +488,7 @@ def compute_precision_vs_eta_iterative(
 
         # Unbinned convergence
         ub = conv_fn(res)
-        unbinned_sigma = ub[sigma_key]
+        unbinned_sigma = ub[metric_key]
         unbinned_cuts[name] = ub
 
         centers, sigmas, counts = [], [], []
@@ -487,7 +499,7 @@ def compute_precision_vs_eta_iterative(
 
             if n >= min_tracks:
                 conv = conv_fn(res[mask])
-                sigmas.append(conv[sigma_key])
+                sigmas.append(conv[metric_key])
                 counts.append(conv["n_kept"])
             else:
                 sigmas.append(np.nan)
@@ -505,31 +517,6 @@ def compute_precision_vs_eta_iterative(
         }
 
     return eta_bins, result, unbinned_cuts
-
-
-def load_acts_precision_npz(
-    path: str | Path,
-) -> tuple[dict[str, dict[str, np.ndarray]], str] | None:
-    """Load ACTS precision-vs-η from the NPZ written by evaluate_acts_tracking.py."""
-    path = Path(path)
-    if not path.exists():
-        return None
-    npz = np.load(path, allow_pickle=False)
-    label_file = path.parent / (path.stem + "_label.txt")
-    label = label_file.read_text().strip() if label_file.exists() else "ACTS (Selected, DM)"
-
-    result: dict[str, dict[str, np.ndarray]] = {}
-    for name in PARAMS:
-        if f"{name}_std" not in npz:
-            continue
-        result[name] = {
-            "eta_centers": npz[f"{name}_eta_centers"],
-            "std": npz[f"{name}_std"],
-            "std_err": npz.get(f"{name}_std_err", npz[f"{name}_std"] * 0.0),
-            "count": npz.get(f"{name}_count", np.ones_like(npz[f"{name}_std"])),
-            "unbinned_std": float(npz[f"{name}_unbinned_std"]),
-        }
-    return result, label
 
 
 # ============================================================================
@@ -619,7 +606,7 @@ def write_residual_statistics_report(
 
         stats.append(("", "", None, None))  # blank separator
         stats.append((
-            f"Iter. RMS (3σ clip)",
+            f"Iter. RMSE (3σ clip)",
             f"{ml_irms['rms']:>14.6f}",
             f"{acts_irms['rms']:>14.6f}" if has_acts else None,
             None,
@@ -778,10 +765,6 @@ def add_common_args(parser):
         help="Which split to load ACTS data from (default: test)",
     )
     parser.add_argument(
-        "--compare-acts-npz", type=str, default=None,
-        help="Path to acts_precision_vs_eta.npz (legacy overlay)",
-    )
-    parser.add_argument(
         "--regime-dm-tight-selection", action="store_true",
         help="Add an extra regime applying tight kinematic cuts (pT >= 0.5 GeV, |eta| <= 3, ...) + DM",
     )
@@ -822,13 +805,6 @@ def load_all_data(args):
         else:
             print(f"  ACTS augmentation not found in {args.data_dir}")
 
-    acts_npz_data, acts_npz_label = None, "ACTS (Selected, DM)"
-    if args.compare_acts_npz:
-        result = load_acts_precision_npz(args.compare_acts_npz)
-        if result is not None:
-            acts_npz_data, acts_npz_label = result
-            print(f"  Loaded ACTS NPZ comparison ({acts_npz_label})")
-
     ml_residuals = compute_residuals(data)
 
     return {
@@ -838,8 +814,6 @@ def load_all_data(args):
         "acts_reco": acts_reco,
         "acts_dm_mask": acts_dm_mask,
         "track_nhits": track_nhits,
-        "acts_npz_data": acts_npz_data,
-        "acts_npz_label": acts_npz_label,
         "output_dir": output_dir,
         "eta_range": (args.eta_min, args.eta_max),
         "n_eta_bins": args.n_eta_bins,
@@ -1129,8 +1103,6 @@ def build_regime_data(ctx):
             "n_eta_bins": n_eta_bins,
             "ml_preds": data["preds"],
             "ml_targets": data["targets"],
-            "acts_npz_data": ctx["acts_npz_data"],
-            "acts_npz_label": ctx["acts_npz_label"],
         }))
 
     return regimes

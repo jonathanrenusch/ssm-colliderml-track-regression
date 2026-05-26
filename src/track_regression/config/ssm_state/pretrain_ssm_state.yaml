@@ -1,23 +1,28 @@
 # =============================================================================
-# finetune_ssm_cls_adamw_packed — Phase 2 packed-batch finetune (opt-in).
+# SSM (Mamba-2 state) + Q7 "safety" config — fp32 pretrain on p200_core
 # =============================================================================
-# Identical to finetune_ssm_cls_adamw.yaml except `data.packed_batches: true`.
-# See pretrain_ssm_cls_packed.yaml for the rationale and equivalence
-# caveat. Warm-starts from the (packed-trained) pretrain_ssm_cls_packed
-# checkpoint — set `pretrained_ckpt_path` below before launching.
+# Exact loss configuration from alt_study4_direct_quantile_eta.yaml:
+#   - 7 quantiles [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+#   - Uniform weights (all 1.0), no qop_tail_weight / qop_scale
+#   - Original (tighter) norm bounds: d0 [-1,1], z0 [-150,150], eta [-3,3], qop [-2,2]
+#   - phi: circular with beta=0.01
+# This is the proven baseline — kept as a safe fallback baseline.
+#
+# Stability: LR rolled back to alt_study4 exact (max 5.0e-05, onecycle, Lion
+# default betas) — the schedule alone keeps training stable.
 # =============================================================================
 
+# Pre-trained checkpoint shipped at checkpoints/pretrain_ssm_state/best.ckpt.
+# Pass it to `train.py test --ckpt_path ...` for evaluation; leave null here so
+# `train.py fit` trains from scratch.
+ckpt_path: null
 trainer:
-  devices: [0, 1]
+  devices: [2]
   max_epochs: 50
-  precision: 32-true
-  gradient_clip_val: 1.0
-  reload_dataloaders_every_n_epochs: 1
-  benchmark: true
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-Q7-unbottleneck-residinit-A-AdamW-WSD-FP32-finetune-PACKED
+      name: TRK-SSMSTATE-pretrain
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -26,14 +31,6 @@ trainer:
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
-        log_layer_stats: true
-        log_output_head_per_dim: true
-        output_head_param_groups:
-          d0: [0, 7]
-          z0: [7, 14]
-          phi: [14, 16]
-          theta: [16, 23]
-          qop: [23, 30]
     - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
@@ -51,36 +48,25 @@ trainer:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/total
-        patience: 30
+        patience: 50
         min_delta: 0.0
         mode: min
         verbose: true
         check_on_train_epoch_end: false
 
 model:
-  pretrained_ckpt_path: null
-  optimizer: AdamW
-  lrs_config:
-    schedule: wsd
-    initial: 5.0e-06
-    max: 5.0e-05
-    end: 2.5e-06
-    pct_start: 0.02
-    decay_pct: 0.5
-    weight_decay: 0.02
-    betas: [0.9, 0.95]
-    skip_scheduler: false
-
   model:
     init_args:
-      state_head_output_dim: 128
-      state_head_hidden_layers: [192]
-      state_head_dropout: 0.0
+      pool: ssm_state
+      # Run the SSM encoder in full fp32 (override the bf16 base default).
+      # The Mamba-2 selective-scan fp32 path closes the residual z0/theta/qop
+      # core-resolution gap vs ACTS CKF.
+      encoder_autocast_dtype: float32
       encoder:
-        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        class_path: track_regression.mamba_state.BidirectionalMambaEncoder
         init_args:
-          num_layers: 10
-          dim: 192
+          num_layers: 9
+          dim: 128
           d_state: 32
           d_conv: 4
           expand: 2
@@ -122,13 +108,16 @@ model:
               norm_min: -2.0
               norm_max: 2.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+  optimizer: Lion
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
 
 data:
-  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
-  load_acts: true
-  batch_size: 20000
-  num_workers: 1
-  pin_memory: true
-  streaming: true
-  shard_buffer_size: 50
-  packed_batches: true
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
+  batch_size: 2048
+  num_workers: 8

@@ -530,14 +530,20 @@ def collate_tracks_packed(
 
     All hits across the batch are concatenated into a single
     ``(1, total_L, D)`` tensor; per-track segment IDs and cumulative
-    segment lengths drive Mamba-2's state reset and the encoder's
-    segment-wise flip. No padding tokens are ever emitted, so encoder
-    compute scales with the *mean* track length instead of the *max*.
+    segment lengths drive Mamba-2's state reset / segment-wise flip
+    (SSM-CLS) and flash-attn2's ``cu_seqlens`` argument (transformer).
+    No padding tokens are ever emitted, so encoder compute scales with
+    the *mean* track length instead of the *max*.
 
     Hits within each track are loaded already in the on-disk sort order
-    (currently ``s``; will become truth-time after the Phase 1 fix). The
-    encoder is called with ``x_sort_value=None`` in packed mode, so the
-    on-disk order is the order the model sees.
+    (truth-time). The encoder does NOT re-sort in packed mode; the
+    on-disk order is the order the model sees. The SSM-CLS encoder
+    consumes ``cu_seqlens`` + ``seq_idx`` directly; the transformer
+    encoder (``EncoderWithCLS``) consumes the same packed inputs via
+    its ``_forward_packed`` path, which interleaves CLS tokens at each
+    segment start and drives the inner encoder layers with an augmented
+    ``cu_seqlens`` so ``flash_attn_varlen_func`` masks attention across
+    segments naturally — no padded→unpad→pack→pad round-trip.
 
     Returns
     -------
@@ -706,8 +712,11 @@ class ColliderMLRegrDataModule(LightningDataModule):
         self.shard_buffer_size = shard_buffer_size
         self.prefetch_factor = prefetch_factor
         # Phase 2 opt-in: emit packed batches (1, total_L, D + seq_idx +
-        # cu_seqlens) instead of padded (B, max_L, D). Compatible only
-        # with the SSM-CLS encoder (mamba_cls.BidirectionalMambaCLSEncoder).
+        # cu_seqlens) instead of padded (B, max_L, D). Supported by the
+        # SSM-CLS encoder (mamba_cls.BidirectionalMambaCLSEncoder) and
+        # the transformer encoder (transformer_encoder.EncoderWithCLS)
+        # — both consume cu_seqlens + seq_idx natively, skipping the
+        # padded→unpad→varlen→pad round-trip on every forward.
         self.packed_batches = bool(packed_batches)
         self._collate_fn = collate_tracks_packed if self.packed_batches else collate_tracks
         # Tail upsampling (d0 based): when threshold_mm > 0 and weight != 1,

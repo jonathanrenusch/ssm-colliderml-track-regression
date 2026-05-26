@@ -1,15 +1,20 @@
 # =============================================================================
-# Run B finetune on the run1_unbottleneck_residinit pretrain.
-# Lion-continuation + WSD on p200_core_kf_matched, fp32 encoder.
+# SSM-CLS fine-tune — Lion-continuation + WSD on p200_core_kf_matched,
+# fp32 encoder.
 # =============================================================================
-# See run1_unbottleneck_residinit_finetune_A_adamw_wsd_fp32.yaml for the four
-# pretrain quirks reproduced here (un-bottlenecked pool_head, residual_depth_init,
-# loss weights, per-output-dim grad logging). Same architecture/checkpoint/
-# dataset/BS as Run A — only the optimizer family / LR / WD differs.
+# Same architecture / checkpoint / dataset / BS as finetune_ssm_cls_adamw.yaml
+# — only the optimizer family / LR / WD differs. See that file's header
+# for the shared rationale (pool_head shape matches the pretrain
+# checkpoint, loss weights, per-output-dim grad logging).
+#
+# Lion-continuation: Lion was the pretrain optimizer, so continuing in
+# Lion preserves the weight-norm basin (Gupta et al. 2023). Peak LR is
+# halved from 3e-5 to 1.5e-5 — below the pretrain Lion peak (5e-5) — so
+# fine-tune does not blow the basin.
 # =============================================================================
 
 trainer:
-  devices: [2, 3]
+  devices: [0, 1]
   max_epochs: 50
   precision: 32-true
   gradient_clip_val: 1.0
@@ -18,7 +23,7 @@ trainer:
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-Q7-unbottleneck-residinit-B-Lion-WSD-FP32-finetune
+      name: TRK-SSMCLS-finetune-lion-wsd
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -59,10 +64,9 @@ trainer:
         check_on_train_epoch_end: false
 
 model:
-  # TODO: replace with the converged run1_unbottleneck_residinit pretrain
-  # checkpoint once it lands (training is running overnight 2026-04-29).
-  # Set this to the path of your pretrained SSM-CLS checkpoint (produced by
-  # `bash scripts/01_train.sh pretrain_ssm_cls`); leave null to fine-tune from scratch.
+  # Set this to the path of your pretrained SSM-CLS checkpoint (produced
+  # by ``bash scripts/01_train.sh pretrain_ssm_cls``); leave null to
+  # fine-tune from scratch.
   pretrained_ckpt_path: null
   optimizer: Lion
   lrs_config:
@@ -78,8 +82,9 @@ model:
 
   model:
     init_args:
-      state_head_output_dim: 128
-      state_head_hidden_layers: [192]
+      # Unbottlenecked pool_head — matches pretrain_ssm_cls_packed/padded.
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
       state_head_dropout: 0.0
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
@@ -131,7 +136,7 @@ model:
 data:
   preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
   load_acts: true
-  batch_size: 20000
+  batch_size: 22000
   num_workers: 1
   pin_memory: true
   streaming: true

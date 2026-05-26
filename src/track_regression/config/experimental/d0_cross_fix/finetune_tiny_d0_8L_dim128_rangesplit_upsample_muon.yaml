@@ -1,0 +1,163 @@
+# =============================================================================
+# Tiny d0 fine-tune — 3-head range-split classifier + TAIL UPSAMPLING,
+# MuonHybrid (2-D weights) + AdamW (1-D weights) + WSD on
+# p200_core_kf_matched, bf16-mixed encoder.
+# =============================================================================
+# Sibling of tiny_d0_8L_dim128_rangesplit_upsample.yaml (the pretrain). Same
+# tiny architecture (8 L / dim=128 / d_state=16 / pool=ssm_cls), same
+# range-split d0 head (24 inner / 420 outer + binary router with
+# inner_route_threshold=0.8), same tail-upsample (weight=19 for |truth d0|
+# > 30 µm) — the cross-fix recipe is preserved end-to-end so the finetune
+# does not collapse back to the beamspot mode.
+#
+# Fine-tuning recipe copied from finetune_ssm_cls_muon.yaml:
+#   - optimizer: MuonHybrid (Muon for 2-D weights, AdamW for 1-D)
+#   - lrs_config: WSD schedule (initial / max / end / decay_pct=0.5,
+#     pct_start=0.02), all six muon-group / adamw-group LRs and WD halved
+#     vs the SSM-CLS pretrain Lion recipe — same halving applied here so
+#     the finetune does not blow out the basin found in pretrain.
+#   - max_epochs=50, EarlyStopping patience=30 (vs 25 in the d0 base —
+#     finetune curves are flatter so a longer patience is appropriate).
+#   - DDP devices=[0, 1] (matches muon finetune).
+#   - batch_size=20000 (down from 30000 in d0 pretrain — matches muon
+#     finetune's BS to share its memory profile under DDP).
+#
+# Precision is INHERITED FROM THE D0-CROSS-FIX BASE (bf16-mixed +
+# encoder_autocast_dtype=bfloat16), NOT the fp32 of the muon finetune.
+# The cross-fix research line is bf16-native (per memory: validated d0 cross
+# fix at commit da4a7697 ran in bf16); flipping to fp32 here would require
+# re-validation of the upsample-router behaviour and is out of scope.
+# Set ``trainer.precision: 32-true`` and add ``encoder_autocast_dtype:
+# float32`` to the model init_args block if you later want a fp32 finetune.
+#
+# Set ``model.pretrained_ckpt_path`` to the d0 cross-fix pretrain
+# checkpoint (the best.ckpt from a tiny_d0_8L_dim128_rangesplit_upsample
+# run) before launching, otherwise this trains from scratch.
+# =============================================================================
+
+trainer:
+  devices: [0, 1]
+  max_epochs: 50
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  reload_dataloaders_every_n_epochs: 1
+  benchmark: true
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-d0fix-finetune-tiny-8L-dim128-rangesplit-upsample19-muon-wsd
+      project_name: ssm-track-regression
+      offline_directory: logs/comet_offline
+  callbacks:
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 25
+        log_parameter_stats: false
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 25
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 25
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 30
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  # Set this to the path of the d0 cross-fix pretrain checkpoint (best.ckpt
+  # from a tiny_d0_8L_dim128_rangesplit_upsample run); leave null to
+  # fine-tune from scratch (defeats the point of a finetune).
+  pretrained_ckpt_path: null
+
+  optimizer: MuonHybrid
+  lrs_config:
+    schedule: wsd
+    initial: 5.0e-06       # halved from 1e-5
+    max: 5.0e-05           # halved from 1e-4 (AdamW group)
+    end: 2.5e-06           # halved from 5e-6
+    weight_decay: 0.02
+    betas: [0.9, 0.95]
+    muon_max: 1.5e-04      # halved from 3e-4 (Muon group)
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+    pct_start: 0.02
+    decay_pct: 0.5         # 50% cosine cooldown
+    skip_scheduler: false
+
+  model:
+    init_args:
+      pool: ssm_cls
+      dim: 128
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      output_head_hidden_layers: [128]
+      output_head_init_scale: 0.01
+      encoder_autocast_dtype: bfloat16
+      separate_d0_head: false
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 8
+          dim: 128
+          d_state: 16
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0]
+          config:
+            d0:
+              type: range_split_classification
+              k_inner: 24
+              k_outer: 420
+              inner_half_mm: 0.030
+              outer_half_mm: 2.5
+              split_mm: 0.030
+              weight_router: 1.0
+              weight_inner: 1.0
+              weight_outer: 1.0
+              weight: 1.0
+              # Inference-time asymmetric routing: commit to the inner head
+              # only when softmax(router)[inner] > 0.8. Below that, route to
+              # the outer head so uncertain tracks get bounded ~30 µm error
+              # at the outer edge bin instead of unbounded crushed-to-0
+              # error at the inner centre bin.
+              inner_route_threshold: 0.8
+
+data:
+  packed_batches: true
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+  load_acts: true
+  batch_size: 20000
+  num_workers: 1
+  pin_memory: true
+  streaming: true
+  shard_buffer_size: 50
+  # MUST be present at finetune as well — without tail upsampling the d0
+  # distribution reverts to the natural 95/5 core/tail split and the
+  # router collapses back toward predicting "always inner", undoing the
+  # cross fix. weight=19 gives an effective 50/50 batch-level mix.
+  tail_upsample_threshold_mm: 0.030
+  tail_upsample_weight: 19.0

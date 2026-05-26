@@ -213,7 +213,14 @@ class MinimalGpuMonitor(Callback):
 
     @staticmethod
     def _torch_memory_util(device_idx: int) -> float:
-        free_b, total_b = torch.cuda.mem_get_info(device_idx)
+        # NVML cannot query memory on MIG slices the way the caching allocator
+        # expects, raising "NVML_SUCCESS == r INTERNAL ASSERT FAILED" on the
+        # first call. Fall through to NaN so the metric is just absent in
+        # Comet rather than killing the run.
+        try:
+            free_b, total_b = torch.cuda.mem_get_info(device_idx)
+        except RuntimeError:
+            return float("nan")
         used_b = total_b - free_b
         return 100.0 * float(used_b) / max(float(total_b), 1.0)
 

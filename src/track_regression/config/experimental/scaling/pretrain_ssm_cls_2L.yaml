@@ -17,7 +17,7 @@ trainer:
   devices: [1]
   logger:
     init_args:
-      name: TRK-SSMCLS-depth-scaling-2L-d_state16
+      name: TRK-SSMCLS-scaling-pretrain-2L-dstate16
 
 model:
   model:

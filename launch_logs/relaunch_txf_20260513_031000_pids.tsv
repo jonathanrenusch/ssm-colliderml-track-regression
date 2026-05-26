@@ -1,0 +1,4 @@
+pid	mig	config	log
+119995	MIG-1f292bf8-f63f-570f-a866-efaab3ceb50a	pretrain_transformer_2cls_lr1e-4	launch_logs/pretrain_transformer_2cls_lr1e-4_20260513_031000.log
+120528	MIG-82b2fca4-9873-5fce-b977-4bd92a37f2cb	pretrain_transformer_2cls_layerscale01	launch_logs/pretrain_transformer_2cls_layerscale01_20260513_031000.log
+121107	MIG-9eee2fd9-6bad-585f-a6bc-ee346d274885	pretrain_transformer_2cls_tuned_lr1e-4	launch_logs/pretrain_transformer_2cls_tuned_lr1e-4_20260513_031000.log

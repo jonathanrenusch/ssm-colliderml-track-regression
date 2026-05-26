@@ -67,7 +67,7 @@ from torch import Tensor, nn
 from torch.optim import AdamW
 
 from track_regression._lib.dense import Dense
-from track_regression.losses import MixtureDensityLoss, TrackParameterLoss
+from track_regression.losses import TrackParameterLoss
 from track_regression.mamba_state import BidirectionalMambaEncoder
 from track_regression.muon import MuonHybrid, split_params_for_muon
 
@@ -234,7 +234,6 @@ class TrackParameterRegressor(nn.Module):
         input_net_activation: str = "SiLU",
         # Data config
         input_fields: list[str] | None = None,
-        sort_field: str = "s",
         fourier_scales: list[int] | None = None,
         fourier_base: int = 3,
         norm_min: list[float] | None = None,
@@ -524,10 +523,10 @@ class TrackParameterRegressor(nn.Module):
         seq_idx = inputs.get("seq_idx")
         hit_valid = inputs.get("hit_valid")
         cu_seqlens = inputs.get("cu_seqlens")
-        if cu_seqlens is not None and self.pool != "ssm_cls":
+        if cu_seqlens is not None and self.pool not in ("ssm_cls", "register_token"):
             raise ValueError(
                 f"Packed batches (cu_seqlens given) are only supported with "
-                f"pool='ssm_cls'; got pool='{self.pool}'."
+                f"pool in ('ssm_cls', 'register_token'); got pool='{self.pool}'."
             )
 
         # Min-max normalise
@@ -551,8 +550,20 @@ class TrackParameterRegressor(nn.Module):
             dtype=self.encoder_autocast_dtype,
             enabled=use_autocast,
         ):
-            if self.pool == "register_token":
-                # Transformer encoder path — uses `kv_mask` for padding.
+            if self.pool == "register_token" and cu_seqlens is not None:
+                # Packed-batch transformer path.  ``sort_key`` is passed
+                # for the posenc only; the encoder does NOT run a global
+                # argsort in packed mode (segments are pre-sorted by the
+                # collate, and a global sort would mix them — same
+                # reasoning as the SSM-CLS packed branch below).
+                _, pooled = self.encoder(
+                    x,
+                    x_sort_value=sort_key,
+                    seq_idx=seq_idx,
+                    cu_seqlens=cu_seqlens,
+                )
+            elif self.pool == "register_token":
+                # Padded transformer encoder path — uses `kv_mask` for padding.
                 _, pooled = self.encoder(x, x_sort_value=sort_key, kv_mask=hit_valid)
             elif self.pool == "ssm_cls" and cu_seqlens is not None:
                 # Packed-batch SSM-CLS path. ``x_sort_value`` is intentionally
@@ -636,240 +647,6 @@ class TrackParameterRegressor(nn.Module):
         )
 
 
-# ============================================================================
-# Twin-encoder d0 classifier (separate encoders for core / tail + router)
-# ============================================================================
-
-
-class TwinEncoderD0Classifier(nn.Module):
-    """Two encoders × two range-specialised classifier heads + a router.
-
-    Architecture
-    ------------
-    input_net (shared)
-      │
-      ├─► encoder_inner → pooled_inner (B, 2·dim) ─► pool_head_inner ─► inner_output_head (K_inner classes)
-      │
-      ├─► encoder_outer → pooled_outer (B, 2·dim) ─► pool_head_outer ─► outer_output_head (K_outer classes)
-      │
-      └─► router_head( cat(pooled_inner.detach(), pooled_outer.detach()) ) ─► (B, 2) binary logits
-
-    Output layout of ``pred`` matches
-    :class:`RangeSplitClassificationLoss`: ``[K_inner | K_outer | 2]`` so the
-    same loss handles mask-based teacher forcing + argmax routing at
-    inference.  Stop-grad on the router input means DFL-classifier gradients
-    never reach either encoder through the router path — the router is
-    trained purely by its own supervised binary CE on ``|truth_d0| > split``.
-
-    Parameters
-    ----------
-    encoder_inner, encoder_outer : nn.Module
-        Two ``BidirectionalMambaCLSEncoder`` instances; each must have
-        ``pool == 'ssm_cls'`` semantics (pool returns ``(B, 2·dim)``).
-    loss_module : TrackParameterLoss
-        Must have exactly one parameter ``d0`` configured with
-        ``type: range_split_classification``.  The k_inner / k_outer there
-        determine the head widths here.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        dim: int,
-        encoder_inner: nn.Module,
-        encoder_outer: nn.Module,
-        loss_module: TrackParameterLoss,
-        # Input embedding
-        input_net_hidden_layers: int | list[int] | None = 0,
-        input_net_dropout: float = 0.0,
-        input_net_activation: str = "SiLU",
-        # Per-encoder pool/head sizing
-        pool_head_output_dim: int = 128,
-        pool_head_hidden_layers: int | list[int] | None = 0,
-        pool_head_dropout: float = 0.0,
-        pool_head_activation: str = "SiLU",
-        output_head_hidden_layers: int | list[int] | None = 0,
-        output_head_dropout: float = 0.0,
-        output_head_activation: str = "SiLU",
-        output_head_init_scale: float = 1.0,
-        # Router sizing
-        router_hidden_layers: int | list[int] | None = None,
-        router_dropout: float = 0.0,
-        # Data / preprocessing
-        input_fields: list[str] | None = None,
-        sort_field: str = "s",
-        fourier_scales: list[int] | None = None,
-        fourier_base: int = 3,
-        norm_min: list[float] | None = None,
-        norm_max: list[float] | None = None,
-        encoder_autocast_dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16",
-    ):
-        super().__init__()
-
-        self.input_dim = input_dim
-        self.dim = dim
-        self.input_fields = input_fields or []
-        self.encoder_autocast_dtype = {
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-            "float32": torch.float32,
-        }[encoder_autocast_dtype]
-
-        self.fourier_scales = fourier_scales if fourier_scales is not None else [-3, -2, -1, 0, 1, 2, 3]
-        self.fourier_base = fourier_base
-        fourier_dim = input_dim * 2 * len(self.fourier_scales)
-
-        if norm_min is not None and norm_max is not None:
-            self.register_buffer("norm_min", torch.tensor(norm_min, dtype=torch.float32))
-            self.register_buffer("norm_max", torch.tensor(norm_max, dtype=torch.float32))
-            self.use_norm = True
-        else:
-            self.use_norm = False
-
-        # Shared input embedding.  Both encoders see the same per-hit
-        # representation — they differentiate via their own weights.
-        self.input_net = Dense(
-            input_size=fourier_dim,
-            output_size=dim,
-            hidden_layers=input_net_hidden_layers,
-            dropout=input_net_dropout,
-            activation=self._resolve_activation(input_net_activation),
-        )
-
-        self.encoder_inner = encoder_inner
-        self.encoder_outer = encoder_outer
-        self.loss_module = loss_module
-
-        # Validate the loss is the range-split classifier and extract K_inner / K_outer
-        from track_regression.losses import RangeSplitClassificationLoss
-        if loss_module.parameter_order != ["d0"]:
-            raise ValueError(
-                f"TwinEncoderD0Classifier requires parameter_order=['d0']; "
-                f"got {loss_module.parameter_order}"
-            )
-        d0_loss = loss_module.losses["d0"]
-        if not isinstance(d0_loss, RangeSplitClassificationLoss):
-            raise TypeError(
-                "TwinEncoderD0Classifier requires the d0 loss to be "
-                f"RangeSplitClassificationLoss; got {type(d0_loss).__name__}"
-            )
-        self.k_inner = d0_loss.k_inner
-        self.k_outer = d0_loss.k_outer
-
-        # Per-encoder pool heads (reduce 2·dim → pool_head_output_dim).
-        self.pool_head_inner = Dense(
-            input_size=2 * dim,
-            output_size=pool_head_output_dim,
-            hidden_layers=pool_head_hidden_layers,
-            dropout=pool_head_dropout,
-            activation=self._resolve_activation(pool_head_activation),
-        )
-        self.pool_head_outer = Dense(
-            input_size=2 * dim,
-            output_size=pool_head_output_dim,
-            hidden_layers=pool_head_hidden_layers,
-            dropout=pool_head_dropout,
-            activation=self._resolve_activation(pool_head_activation),
-        )
-
-        # Final classification heads per encoder.
-        self.output_head_inner = Dense(
-            input_size=pool_head_output_dim,
-            output_size=self.k_inner,
-            hidden_layers=output_head_hidden_layers,
-            dropout=output_head_dropout,
-            activation=self._resolve_activation(output_head_activation),
-        )
-        self.output_head_outer = Dense(
-            input_size=pool_head_output_dim,
-            output_size=self.k_outer,
-            hidden_layers=output_head_hidden_layers,
-            dropout=output_head_dropout,
-            activation=self._resolve_activation(output_head_activation),
-        )
-
-        # Router head — reads concat of the TWO encoders' pooled outputs with
-        # stop-grad applied (see forward), so gradients don't propagate back.
-        router_hidden = router_hidden_layers if router_hidden_layers is not None else [128]
-        self.router_head = Dense(
-            input_size=4 * dim,  # cat of pooled_inner (2·dim) + pooled_outer (2·dim)
-            output_size=2,
-            hidden_layers=router_hidden,
-            dropout=router_dropout,
-            activation=self._resolve_activation(output_head_activation),
-        )
-
-        # Scale down final classification weights for near-zero initial logits.
-        if output_head_init_scale != 1.0:
-            for head in (self.output_head_inner, self.output_head_outer, self.router_head):
-                last = head.net[-1]
-                assert isinstance(last, nn.Linear)
-                with torch.no_grad():
-                    last.weight.mul_(output_head_init_scale)
-                    if last.bias is not None:
-                        last.bias.zero_()
-
-    # Reuse the class activation resolver from TrackParameterRegressor so
-    # the activation map (silu/gelu/swiglu/...) is single-source-of-truth.
-    _resolve_activation = staticmethod(TrackParameterRegressor._resolve_activation)
-
-    def _normalise(self, x: Tensor) -> Tensor:
-        if not self.use_norm:
-            return x
-        span = (self.norm_max - self.norm_min).clamp(min=1e-8)
-        return (x - self.norm_min) / span
-
-    def forward(self, inputs: dict[str, Tensor]) -> dict[str, Tensor]:
-        x = inputs["hit_features"]
-        sort_key = inputs["hit_time"]
-        seq_idx = inputs.get("seq_idx")
-
-        x = self._normalise(x)
-        x = fourier_encode(x, self.fourier_scales, self.fourier_base)
-        x = self.input_net(x)
-
-        use_autocast = self.encoder_autocast_dtype != torch.float32
-        with torch.amp.autocast(
-            device_type="cuda",
-            dtype=self.encoder_autocast_dtype,
-            enabled=use_autocast,
-        ):
-            _, pooled_inner = self.encoder_inner(x, x_sort_value=sort_key, seq_idx=seq_idx)
-            _, pooled_outer = self.encoder_outer(x, x_sort_value=sort_key, seq_idx=seq_idx)
-
-        # Cast pooled summaries back to fp32 for the heads.
-        pooled_inner = pooled_inner.to(torch.float32)
-        pooled_outer = pooled_outer.to(torch.float32)
-
-        # Inner head (core, K_inner bins) — only the inner encoder feeds it.
-        z_inner = self.pool_head_inner(pooled_inner)
-        inner_logits = self.output_head_inner(z_inner)
-
-        # Outer head (tail, K_outer bins) — only the outer encoder feeds it.
-        z_outer = self.pool_head_outer(pooled_outer)
-        outer_logits = self.output_head_outer(z_outer)
-
-        # Router — sees both pooled summaries but with stop-grad so its
-        # gradient does not flow into either encoder.
-        router_in = torch.cat([pooled_inner.detach(), pooled_outer.detach()], dim=-1)
-        router_logits = self.router_head(router_in)
-
-        pred = torch.cat([inner_logits, outer_logits, router_logits], dim=-1)
-        return {"pred": pred, "hidden_state": (pooled_inner, pooled_outer)}
-
-    def predict(self, outputs: dict[str, Tensor]) -> dict[str, Tensor]:
-        return self.loss_module.predict(outputs["pred"])
-
-    def compute_loss(
-        self,
-        outputs: dict[str, Tensor],
-        targets: dict[str, Tensor],
-        valid_mask: Tensor | None = None,
-        trim_mask: Tensor | None = None,
-    ) -> dict[str, Tensor]:
-        return self.loss_module(
-            outputs["pred"], targets, valid_mask=valid_mask, trim_mask=trim_mask
-        )
 
 
 # ============================================================================
@@ -894,7 +671,7 @@ class TrackRegressionWrapper(LightningModule):
 
     def __init__(
         self,
-        model: nn.Module,  # TrackParameterRegressor or TwinEncoderD0Classifier (any module exposing forward / predict / compute_loss / loss_module)
+        model: nn.Module,  # TrackParameterRegressor (any module exposing forward / predict / compute_loss / loss_module)
         lrs_config: dict[str, Any],
         optimizer: Literal["AdamW", "Lion", "MuonHybrid"] = "AdamW",
         name: str = "TrackRegression",
@@ -1074,9 +851,6 @@ class TrackRegressionWrapper(LightningModule):
         for name, value in calibration_metrics.items():
             self.log(f"{stage}/{name}", value, sync_dist=do_sync)
 
-        # MDN component diagnostics (π_k, μ_k, σ_k per mixture component)
-        self._log_mdn_components(outputs["pred"], valid_mask, stage)
-
         # Compute and log per-parameter metrics for all stages.
         # Use predict_physical to add back delta anchors for correct residuals.
         preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
@@ -1199,68 +973,6 @@ class TrackRegressionWrapper(LightningModule):
                                 sync_dist=True,
                             )
 
-    def _log_mdn_components(
-        self,
-        raw: Tensor,
-        valid_mask: Tensor | None,
-        stage: str,
-    ) -> None:
-        """Log per-component MDN diagnostics (mean π, μ, σ, effective K, MAP fraction).
-
-        For every parameter whose loss is a ``MixtureDensityLoss``, record
-        one scalar per component plus two aggregate diagnostics:
-          - ``{stage}/{name}/mdn/pi_{k}``       — batch-mean mixture weight
-          - ``{stage}/{name}/mdn/mu_{k}``       — batch-mean predicted location [physical units]
-          - ``{stage}/{name}/mdn/sigma_{k}``    — batch-mean predicted spread  [physical units]
-          - ``{stage}/{name}/mdn/effective_k``  — ⟨1/Σₖπₖ²⟩, measures how balanced π is
-          - ``{stage}/{name}/mdn/map_frac_{k}`` — fraction of tracks whose MAP component is k
-
-        Watching these during training diagnoses two failure modes:
-          * One component capturing all tracks (`map_frac_{k} → 1`,
-            `effective_k → 1`) → collapse back to single-Gaussian behaviour.
-          * A component going dead (`pi_{k} → 0`, unchanging μ/σ) → K is
-            too large; reduce in the next run.
-        """
-        loss_module = self.model.loss_module
-        if not any(isinstance(sub, MixtureDensityLoss) for sub in loss_module.losses.values()):
-            return
-
-        do_sync = stage != "train"
-        for name, sub_loss in loss_module.losses.items():
-            if not isinstance(sub_loss, MixtureDensityLoss):
-                continue
-            start, end = loss_module.get_output_slice(name)
-            r = raw[..., start:end]
-            if valid_mask is not None:
-                r = r[valid_mask]
-            if r.numel() == 0:
-                continue
-
-            comps = sub_loss.predict_components(r)
-            pi = comps["pi"]        # (N, K)
-            mu = comps["mu"]        # (N, K) physical
-            sigma = comps["sigma"]  # (N, K) physical
-            K = sub_loss.n_components
-
-            for k in range(K):
-                self.log(f"{stage}/{name}/mdn/pi_{k}", pi[..., k].mean(), sync_dist=do_sync)
-                self.log(f"{stage}/{name}/mdn/mu_{k}", mu[..., k].mean(), sync_dist=do_sync)
-                self.log(f"{stage}/{name}/mdn/sigma_{k}", sigma[..., k].mean(), sync_dist=do_sync)
-
-            pi_sq_sum = (pi ** 2).sum(dim=-1).clamp_min(1e-12)
-            self.log(
-                f"{stage}/{name}/mdn/effective_k",
-                (1.0 / pi_sq_sum).mean(),
-                sync_dist=do_sync,
-            )
-
-            k_map = pi.argmax(dim=-1)
-            for k in range(K):
-                self.log(
-                    f"{stage}/{name}/mdn/map_frac_{k}",
-                    (k_map == k).float().mean(),
-                    sync_dist=do_sync,
-                )
 
     # -- train / val / test ------------------------------------------------
 

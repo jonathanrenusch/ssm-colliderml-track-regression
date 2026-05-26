@@ -63,7 +63,7 @@ def _csv_rows(runs: list[dict]) -> list[list]:
                 for who in ("ssm", "ckf"):
                     mean, sig = d[who]
                     row.append(mean * scale)
-                    row.append(2 * sig * scale)  # 2σ (95% CI)
+                    row.append(2 * sig * scale)  # ±2·SE_boot (normal-approx 95% CI)
                 mean, sig = d["ratio"]
                 row.append(mean)
                 row.append(2 * sig)
@@ -100,7 +100,7 @@ def _write_latex(path: Path, runs: list[dict], caption: str) -> None:
     ]
     cmid = " ".join(rf"\cmidrule(lr){{{2 + 3*i}-{4 + 3*i}}}" for i in range(len(PARAMS)))
     lines.append(cmid)
-    lines.append(" & " + " & ".join(["IQR", r"RMS$_{3\sigma}$", "ratio"] * len(PARAMS)) + r" \\")
+    lines.append(" & " + " & ".join(["IQR", r"RMSE$_{3\sigma}$", "ratio"] * len(PARAMS)) + r" \\")
     lines.append(r"\midrule")
 
     for r in runs:
@@ -129,14 +129,14 @@ def run(output_root: Path = PAPER_PLOTS_ROOT) -> None:
     rows = _csv_rows(runs)
     _write_csv(summary_dir / "all_runs.csv", rows)
     _write_latex(summary_dir / "all_runs.tex", runs,
-                 "All runs — IQR/1.349, iter-3σ RMS, SSM/CKF post-clip ratio.")
+                 "All runs — IQR/1.349, iter-3σ RMSE, SSM/CKF post-clip ratio.")
 
     # per axis
     for axis in KNOWN_AXES:
         axis_runs = [r for r in runs if axis in (r["meta"].get("ablation_axes") or [])]
         _write_csv(summary_dir / f"ablation_{axis}.csv", _csv_rows(axis_runs))
         _write_latex(summary_dir / f"ablation_{axis}.tex", axis_runs,
-                     f"Ablation: {axis} — IQR/1.349, iter-3σ RMS, SSM/CKF post-clip ratio.")
+                     f"Ablation: {axis} — IQR/1.349, iter-3σ RMSE, SSM/CKF post-clip ratio.")
 
     # log
     print(f"[aggregate] wrote {len(runs)} runs into {summary_dir}")

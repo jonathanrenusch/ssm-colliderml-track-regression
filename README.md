@@ -6,12 +6,21 @@ ACTS combinatorial Kalman filter (CKF) on the
 [CERN/ColliderML-Release-1](https://huggingface.co/datasets/CERN/ColliderML-Release-1)
 ttbar dataset.
 
-The repository contains the model, three encoder variants (bidirectional
-Mamba-2 with state pool, bidirectional Mamba-2 with CLS pool, and a
-parameter-matched flash-attn2 transformer), the loss family (quantile,
+The repository contains the model, three encoder variants — two
+bidirectional **Mamba-2** (Dao & Gu, 2024) backbones (state-pool and
+CLS-pool readout) and a parameter-matched **multi-head self-attention**
+transformer baseline — so the architecture comparison is Mamba-2 vs
+self-attention at matched parameter count, the loss family (quantile,
 circular, Gaussian-NLL), the data preprocessing pipeline, and a
-publication-quality plotting pipeline that emits per-parameter residual
-plots, RMS-vs-η panels, and bootstrap-error tables.
+publication-quality plotting pipeline that emits per-parameter
+residual plots, RMS-vs-η panels, and bootstrap-error tables.
+
+The headline-numbers transformer baseline runs PyTorch SDPA in fp32 so
+the encoder precision matches the SSM variants. The repository also
+ships **FlashAttention-2** (Dao, 2023) support via the `flash-varlen`
+backend — packed, padding-free attention with `cu_seqlens` boundaries
+— as an opt-in bf16 speed path for users who can trade
+precision-matched comparability for throughput.
 
 **No checkpoints are shipped.** Train your own, or wire your existing
 checkpoint into the fine-tune YAML via `pretrained_ckpt_path`.
@@ -26,7 +35,9 @@ of closest approach to the beamline. `d0` is the perpendicular distance
 from **r** to the *z*-axis (within the transverse plane shown faintly in
 blue at *z = z0*); `z0` is the *z*-coordinate of **r**; `φ` and `θ`
 parametrise the momentum **p** at the perigee; `q/p` is the signed
-inverse momentum. *Schematic — not to scale.*
+inverse momentum. *Schematic — not to scale.* Adapted from the ACTS
+tracking documentation
+([acts-project.github.io/tracking.html](https://acts-project.github.io/tracking.html)).
 
 **(b)** A single proton–proton bunch crossing at the High-Luminosity
 LHC produces thousands of charged-particle trajectories that must be
@@ -46,17 +57,6 @@ evaluate the models in this repository.
 <p align="center">
   <img src="media/architecture.png" alt="Bidirectional Mamba-2 architecture" width="66%">
 </p>
-
-Vector source: [`media/architecture.pdf`](media/architecture.pdf). The PNG above is a
-300 DPI rasterisation for inline rendering.
-
-A 12-feature per-hit input is sorted along **truth time** (a sidecar
-key monotonic in on-helix arc length, starting at the interaction point)
-and embedded with Fourier features into a 192-d token sequence. The encoder runs forward + backward selective scans
-(gated merge adapted from Vision Mamba); a learned CLS token at each scan
-terminus pools the final hidden states. A shared `output_head` regresses
-the five perigee track parameters under a seven-quantile pinball loss,
-with a circular loss for `φ` and η-space parameterisation for `θ`.
 
 ## Hardware
 
@@ -218,10 +218,17 @@ detector identifiers cast to float32. **`s = √(x² + y² + z²)` is the 3-D
 straight-line distance from the IP** — it is kept as an input feature, but
 the encoder sort key is the separate `hit_time` sidecar, *not* `s`. Truth
 time is monotonic in on-helix arc length and gives the physically correct
-inward → outward ordering for both barrel and forward tracks; `s`
-underestimates on-helix arc length on forward tracks and produces a wrong
-sequence order if used as the sort key. CLS tokens, when used, are inserted
-*after* sorting.
+inward → outward ordering on every track; `s` loses monotonicity on
+low-`pT` curling tracks whose radial coordinate decreases (the helix
+spirals back inward) while `|z|` still grows, so sorting by `s` permutes
+hits across the helix arc on those tracks. Empirically (shard 0 of the
+`p0_core_pretrain` variant restricted to the double-matched subset,
+56,187 tracks) `s`-order and `hit_time`-order agree exactly on 98.04 %
+of tracks; the 1.96 % that disagree are concentrated at low `pT`
+(≲ 5 GeV) and central `|η|` (≲ 1.5), peaking at 4.28 % in
+`|η| ∈ [0.5, 1.0)` and dropping to ≤0.05 % for `|η| > 2` (forward tracks
+are fine under `s` because `|z|` dominates). CLS tokens,
+when used, are inserted *after* sorting.
 
 Track length distribution (`core` selection): min = 6, max = 20, mean ≈
 12–13, std ≈ 4. The 20-hit cap motivates `chunk_size: 16` in the SSM
@@ -238,10 +245,7 @@ the LightningDataModule:
 - **Packed (opt-in, `packed_batches=True`).** Tracks are concatenated into a
   single `(1, total_L, D)` token stream accompanied by `seq_idx (1, total_L)`
   int32 segment IDs. Wastes no compute on padding positions. Implemented
-  for the **SSM-CLS** encoder (`mamba_cls.py`) and the transformer's
-  flash-varlen path; packed callers pre-sort hits per segment in collate
-  and the encoder is invoked with `x_sort_value=None` to avoid a
-  cross-segment argsort.
+  for the **SSM-CLS** encoder (`mamba_cls.py`).
 
 ### Sequence readout — CLS vs state
 
@@ -255,25 +259,8 @@ dimension is independent of `d_state`, so the encoder scales depth-first
 without bloating the head, and (ii) only the CLS path supports packed
 batching. The state-pool variant is retained as an ablation reference.
 
-### ACTS-CKF sidecar and the DM subset
 
-Every track carries the ACTS combinatorial Kalman filter's prediction for
-the same five parameters (`acts_reco`) and a boolean `acts_dm` flag derived
-from the **double-matched (DM)** criterion: hit-purity > 75 % AND
-hit-efficiency > 75 %. All paper metrics are computed on the DM subset so
-that the SSM and CKF are scored on the same population of tracks.
-
-DM fraction by variant:
-
-| variant | DM fraction |
-|---|---|
-| `p0_core_pretrain` | ~79 % (56.5 M / 71.5 M tracks) |
-| `p200_core_kf_matched_finetune` | 100 % (filtered at preprocessing time) |
-
-`p200_core_kf_matched_finetune` is restricted to DM tracks precisely so the
-fine-tune training distribution matches the evaluation distribution.
-
-### Simulation provenance
+### Simulation
 
 Events are generated with MadGraph + Pythia8 (`ttbar`, 14 TeV pp),
 simulated in Geant4 via DD4hep on the Open Data Detector, and digitised +
@@ -293,7 +280,7 @@ them in lock-step with the configs if your scratch lives elsewhere.
    per-config commands are printed by `scripts/00_download_data.sh`.
 
 2. **Preprocess** — apply the selection in
-   `utils/selection_p200_datasets.yaml`, pack a compact CSR layout that
+   `src/track_regression/selection_p200_datasets.yaml`, pack a compact CSR layout that
    stores only the hits belonging to selected tracks (~30–250× smaller
    than raw), and augment ACTS-CKF reconstructed parameters + the
    double-matched mask onto every track:
@@ -377,10 +364,6 @@ bash scripts/01_train.sh finetune_ssm_cls_muon      # Muon (2-D) + AdamW (1-D) h
 per-track HDF5 with predicted quantiles, point estimates, and matched
 ACTS-CKF parameters for the double-matched (DM) subset.
 
-**`num_workers=0` is mandatory for inference** — DataLoader worker forks
-corrupt gzip h5 chunks; the symptom is a downstream
-`filter returned failure during read`. The script enforces this.
-
 By default `02_evaluate.sh` looks for the checkpoint at
 `checkpoints/<stem>/best.ckpt`. Override with `--ckpt_path`.
 
@@ -418,26 +401,35 @@ the configs above whose checkpoints you want to plot.
 src/track_regression/config/
 ├── transformer/
 │   ├── base.yaml                            (auto-loaded by train.py)
-│   ├── pretrain_transformer_1cls.yaml       (1 register token)
+│   ├── pretrain_transformer_1cls.yaml       (1 register token, fp32 SDPA)
 │   └── pretrain_transformer_2cls.yaml       (2 register tokens, parameter-matched to SSM-CLS)
 ├── ssm/
 │   ├── base.yaml
 │   └── pretrain_ssm_state.yaml              (state-pool readout, fp32 backbone)
 ├── ssm_cls/
 │   ├── base.yaml
-│   ├── pretrain_ssm_cls.yaml                (CLS-pool readout)
-│   ├── finetune_ssm_cls_adamw.yaml          (AdamW + WSD)
+│   ├── pretrain_ssm_cls.yaml                (CLS-pool readout — headline pretrain)
+│   ├── finetune_ssm_cls_adamw.yaml          (AdamW + WSD — headline fine-tune)
 │   ├── finetune_ssm_cls_lion.yaml           (Lion-continuation + WSD)
 │   ├── finetune_ssm_cls_muon.yaml           (Muon-hybrid + WSD)
-│   ├── d0_cross_fix/                        (single-parameter d0-only ablation)
-│   │   ├── base.yaml
-│   │   └── tiny_d0_8L_dim128_rangesplit_upsample.yaml
-│   │                                         (3-head range-split classifier
-│   │                                          + tail-upsampling 19×, targets the
-│   │                                          d0=0 collapse artefact)
-│   └── (additional packed-batch and KF-hits variants for ongoing experimentation)
-└── scaling/                                  (depth-sweep ablations: 2/4/6/8/10 L)
+│   ├── pretrain_ssm_cls_packed.yaml         (research variant — packed-batch path)
+│   ├── pretrain_ssm_cls_kf_hits.yaml        (research variant — restrict hits to KF-recovered)
+│   ├── finetune_ssm_cls_{adamw,lion,muon}_packed.yaml  (research variants — packed-batch fine-tune)
+│   └── finetune_ssm_cls_muon_kf_hits.yaml   (research variant — Muon + KF-hits selection)
+└── experimental/                             (research-variant subtree)
+    ├── scaling/                              (depth-sweep ablations: 2/4/6/8/10 L)
+    └── d0_cross_fix/                         (single-parameter d0-only ablation)
 ```
+
+The headline numbers reported in the paper use only the seven non-`experimental/`
+configs without `_packed` / `_kf_hits` suffixes: the three pretrain configs
+(`pretrain_transformer_{1,2}cls.yaml`, `pretrain_ssm_state.yaml`,
+`pretrain_ssm_cls.yaml`) plus the three fine-tune optimizer ablations
+(`finetune_ssm_cls_{adamw,lion,muon}.yaml`). The `experimental/`
+subtree and the suffixed SSM-CLS variants are reproducible research
+variants that are not exercised by the README quickstart; the suffixed
+SSM-CLS variants are kept alongside their parents because they inherit
+from the same `ssm_cls/base.yaml`.
 
 Naming convention: **`<role>_<backbone>[_<axis>].yaml`** where role ∈
 {pretrain, finetune}, backbone ∈ {transformer_1cls, transformer_2cls,
@@ -453,10 +445,15 @@ the architecture-specific fields.
   gzip-compressed h5 chunks. Pretrain/finetune may use workers freely.
 - **fp32 backbone for headline numbers.** The Mamba-2 selective-scan
   kernel has a bf16 round-off ceiling on long-range integrated parameters
-  (`z0`, `θ`, `q/p`). All shipped fine-tune configs set
-  `encoder_autocast_dtype: float32` to bypass this. The pretrain configs
-  use bf16 autocast for speed; for fp32-equivalent core-resolution
-  numbers from a bf16-trained checkpoint, override at test time.
+  (`z0`, `θ`, `q/p`). All shipped configs — pretrain and fine-tune,
+  SSM and transformer — set `encoder_autocast_dtype: float32` so the
+  SSM-vs-transformer architecture comparison is precision-matched. The
+  transformer baseline therefore uses `attn_type: torch` (PyTorch SDPA)
+  rather than `flash-varlen`, since the flash-attn-2 CUDA kernel only
+  supports bf16/fp16. Users who want the bf16 flash-varlen speed at the
+  cost of comparability can set `encoder_autocast_dtype: bfloat16` and
+  `attn_type: flash-varlen` on the transformer configs at their own
+  discretion.
 - **`chunk_size: 16` for Mamba-2.** Smaller values crash the installed
   `mamba_ssm` Triton kernel; larger values waste compute on padding for
   ≤20-hit tracks.
@@ -474,21 +471,21 @@ Parts of this codebase — most notably the vendored bits under
 activation / norm blocks, FlexAttention score-mods, padding helpers,
 and the Lightning callback skeletons) and the overall Lightning-CLI +
 YAML configuration layout — are derived from or inspired by
-[samvanstroud/hepattn](https://github.com/samvanstroud/hepattn). We thank
-Sam van Stroud and the hepattn contributors for releasing that work
-under a permissive license; reusing it let us focus on the SSM
+[samvanstroud/hepattn](https://github.com/samvanstroud/hepattn)
+(upstream `HEAD` at the time of the vendoring drop:
+[`1df05ccb00c1a4e5a22a7b76f6182c955c2d9def`](https://github.com/samvanstroud/hepattn/commit/1df05ccb00c1a4e5a22a7b76f6182c955c2d9def)).
+hepattn is licensed under GPL-3.0; this repository is distributed under
+the compatible GPL-3.0-or-later. We thank Sam van Stroud and the
+hepattn contributors — reusing that work let us focus on the SSM
 architecture, loss design, and ablations that are the contribution of
 this repository.
 
 ## Citation
 
 ```bibtex
-@misc{ssm-track-regression,
-  author = {Jonathan Renusch},
-  title  = {Bidirectional state space models for charged-particle trajectory regression},
-  year   = {2026},
-  url    = {https://github.com/<your-org>/ssm-track-regression}
-}
+% TODO: paper citation placeholder — fill in once the accompanying
+% publication is released (BibTeX entry for this repository / paper
+% goes here).
 
 @article{Elitez2025ColliderML,
   title         = {{ColliderML}: The First Release of an

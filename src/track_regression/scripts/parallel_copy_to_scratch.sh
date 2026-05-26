@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Parallel copy of the arxiv_retraining preprocessed datasets EOS → scratch
+# Parallel copy of the arxiv_retraining preprocessed datasets to scratch
 # ============================================================================
 #
-# Source:  /eos/project/e/end-to-end-colliderml/data/arxiv_retraining
+# Source:  ${SRC_ROOT}                              (override with --src)
 # Target:  /scratch/colliderml/arxiv_retraining/<dataset>
+#
+# Set SRC_ROOT below (or pass --src) to point at wherever your
+# preprocessed datasets live (e.g. a slow NFS/EOS mount). The script
+# parallel-copies them into a fast local scratch tree.
 #
 # Four preprocessed datasets are managed by this script:
 #
@@ -62,7 +66,10 @@ DRY_RUN=false
 SCRATCH="/scratch"
 
 # ── Source / target roots ──
-SRC_ROOT="/eos/project/e/end-to-end-colliderml/data/arxiv_retraining"
+# Set SRC_ROOT to wherever your preprocessed datasets live (e.g. a slow
+# NFS / EOS / S3 mount). Override at the CLI with --src. The shipped
+# default below is a generic placeholder; edit it to fit your system.
+SRC_ROOT="${COLLIDERML_SRC_ROOT:-/data/colliderml/arxiv_retraining}"
 DST_SUBDIR="colliderml/arxiv_retraining"   # appended to $SCRATCH
 
 # ── Dataset groups ──

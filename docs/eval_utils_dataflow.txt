@@ -1,0 +1,378 @@
+================================================================================
+  eval_utils.py  —  evaluation-pipeline data flow
+================================================================================
+
+Source: src/track_regression/eval_utils.py
+Producer: src/track_regression/callbacks.py:RegressionPredictionWriter
+          writes the test_predictions.h5 every consumer below reads.
+Consumers of this module:
+    • src/track_regression/paper_plots/  (the shipped paper-plot pipeline)
+    • the legacy standalone-CLI surface in eval_utils.py itself
+      (build_regime_data + write_residual_statistics_report etc.) —
+      meant for an external evaluate_predictions.py runner that is NOT
+      shipped with this release. Kept around for offline use.
+
+
+--------------------------------------------------------------------------------
+0. Module-level constants (defaults consumed across paper_plots/*)
+--------------------------------------------------------------------------------
+
+    PARAMS = ["d0", "z0", "phi", "theta", "qop"]
+              (canonical order — never reshuffle; many call sites index
+               into ACTS reco (N, 5) by this order via enumerate())
+
+    UNIT_SCALE = {"d0": 1, "z0": 1, "phi": 1e3, "theta": 1e3, "qop": 1}
+              (rad → mrad scale used by the standalone CLI report)
+
+    PARAM_LABELS, PARAM_VALUE_LABELS, RESID_LABELS
+              (matplotlib labels with units — read by every plot module)
+
+    FULL_RANGE_PARAMS = {"d0"}
+    HEATMAP_RANGE     = {"d0": (-2.5, 2.5)}
+              (fixed axis bounds for heatmaps — see
+               paper_plots/plots/heatmap_pred_vs_truth.py:_resolve_range)
+
+
+--------------------------------------------------------------------------------
+1. Inputs — two on-disk sources
+--------------------------------------------------------------------------------
+
+    ┌────────────────────────────────────────┐
+    │  <run_dir>/<best>__test_predictions.h5 │  written by
+    │                                        │  RegressionPredictionWriter
+    │   /preds/<param>     (N,)              │  during `train.py test`
+    │   /targets/<param>   (N,)              │
+    │   /quantiles/<param> (N, Q) [optional] │
+    └──────────────────┬─────────────────────┘
+                       │
+                       │ load_predictions(path)
+                       ▼
+        data = {
+            "preds":            {param: (N,) float32},
+            "targets":          {param: (N,) float32},
+            "quantiles":        {param: (N, Q) float32},   # only when present
+            "quantile_levels":  {param: (Q,)  float32},    # τ-levels
+        }
+
+    ┌─────────────────────────────────────────────────────┐
+    │  $DATA_ROOT/<variant>/shard_XXXX/selected_tracks/   │  written by
+    │     acts_reco.npy        (N_shard, 5)               │  preprocess_colliderml_compact
+    │     acts_dm_mask.npy     (N_shard,)  bool           │  with --augment-acts
+    │     track_hit_offsets.npy(N_shard+1,) int64         │  (CSR length encoder)
+    │  plus split.json deciding which shards = "test"     │
+    └────────────────────────┬────────────────────────────┘
+                             │
+                             │ load_acts_augmentation(data_dir, split="test")
+                             ▼
+            (acts_reco, acts_dm_mask, nhits)
+              acts_reco:    (N, 5)  [d0,z0,phi,theta,qop] (NaN if unmatched)
+              acts_dm_mask: (N,)    True iff ACTS double-matched
+              nhits:        (N,)    int32, per-track hit count (CSR diff)
+
+Both arrays are aligned: row k in preds/targets is the same selected
+track as row k in acts_reco / acts_dm_mask (the CSR ordering of the
+test-split shards).
+
+
+--------------------------------------------------------------------------------
+2. Residuals — three builders
+--------------------------------------------------------------------------------
+
+    compute_residuals(data)
+        Inputs:  preds + targets dicts
+        Output:  {param: pred - truth} for every PARAMS entry
+                  + "eta": -ln(tan(theta_truth / 2))
+        Side:    "phi" residual wrapped into (-π, π]
+        Used by: standalone CLI (build_regime_data); paper_plots builds
+                 its own DM residuals via build_dm_residuals which
+                 inlines the same math.
+
+    compute_acts_residuals(acts_reco, targets)
+        Inputs:  (N, 5) acts_reco + targets dict
+        Output:  {param: acts_reco[:,i] - targets[param]} for ACTS-matched rows
+                  + "eta" (only over matched rows)
+        Side:    phi-wrap; rows with NaN in acts_reco are dropped first.
+        Used by: standalone CLI (build_regime_data, the "all_selected"
+                 regime).
+
+    filter_residuals(residuals, mask)
+        Inputs:  residuals dict + boolean/index mask
+        Output:  same dict, every array sliced by mask
+        Use:     restrict to DM subset, primary-d0 subset, tight-selection
+                 subset, etc. (build_regime_data uses it heavily).
+
+
+--------------------------------------------------------------------------------
+3. Metric primitives — five distinct definitions of "precision"
+--------------------------------------------------------------------------------
+
+    compute_precision_vs_eta(residuals, eta_range, n_eta_bins, use_rms)
+        Per-η-bin metric. Default is np.std (σ); pass use_rms=True for
+        sqrt(mean(x²)) (true RMSE, bias-sensitive). No clipping.
+        Returns: (eta_bins, {param: {eta_centers, std, std_err, count,
+                                     unbinned_std}}).
+        Used by: legacy standalone path. Not used by paper_plots/.
+
+    compute_core_metrics_vs_eta(residuals, eta_range, n_eta_bins, core_fraction)
+        Per-η-bin metric on the inner core_fraction (default 95 %) —
+        symmetric percentile cut, then computes RMSE, σ, IQR on the
+        retained core. Returns all three so callers pick.
+        No iterative refinement. Not used by paper_plots/ either, kept
+        for the standalone CLI.
+
+    iterative_rms_convergence(residuals, n_sigma=3, max_iter=5)
+        Single-pass clipper. On each iteration:
+            mean = np.mean(data); sigma = np.std(data)
+            keep [mean - n_sigma*sigma, mean + n_sigma*sigma]
+        Stops when n_kept stabilises OR after 5 passes.
+        Returns: {
+            "mean":   float (of converged set),
+            "rms":    sqrt(mean(x²)) of converged set  ← true RMSE,
+                       bias-sensitive (the ML-community convention)
+            "sigma":  np.std of converged set          ← strict spread
+            "n_kept", "n_total", "cut_lo", "cut_hi",
+            "n_iterations", "frac_kept"
+        }
+        Both "rms" and "sigma" are returned so callers stay honest.
+
+        Used by: paper_plots/stats.py:_iter3sigma_rms
+                 paper_plots/plots/rms_vs_eta.py (both unbinned + per-η-bin)
+                 paper_plots/plots/residual_hist.py (for post-clip x-range)
+                 eval_utils.write_residual_statistics_report (standalone CLI)
+
+    iterative_gaussfit_convergence(residuals, n_sigma=2, max_iter=3)
+        Same idea but each "iteration" is a Gaussian curve_fit to the
+        histogram on the current ±n_sigma window. Used as an alternative
+        to iterative_rms_convergence when you care about the Gaussian
+        core specifically (heavy-tailed parameters lose less signal
+        than the RMSE-based clipper).
+        Returns: {"mean", "sigma", "n_kept", "n_total", "cut_lo",
+                  "cut_hi", "n_iterations", "frac_kept"}.
+
+    compute_precision_vs_eta_iterative(residuals, eta_range, n_eta_bins, method)
+        Thin wrapper that runs either iterative_rms_convergence or
+        iterative_gaussfit_convergence on the full residual set AND on
+        each η bin (min 30 tracks/bin). Returns:
+            (eta_bins, precision_data, unbinned_cuts)
+        precision_data has the same schema as compute_precision_vs_eta
+        — the "std" key holds RMSE when method="iterative_rms" and σ
+        when method="iterative_gaussfit". Used by the standalone CLI.
+
+
+--------------------------------------------------------------------------------
+4. Two ways the metrics actually get used
+--------------------------------------------------------------------------------
+
+    (A) Shipped paper-plot pipeline  (scripts/03_paper_plots.sh → cli.py)
+    ────────────────────────────────────────────────────────────────────
+
+        eval_utils                 paper_plots
+        ──────────                 ───────────
+        load_predictions           ← ❌ NOT used here; paper_plots
+                                        opens the h5 directly in
+                                        predictions.load_predictions_with_d0_override
+
+        load_acts_augmentation     → predictions.build_dm_residuals
+                                        (DM subset only; same alignment
+                                         convention as compute_residuals
+                                         + compute_acts_residuals, inlined)
+
+        iterative_rms_convergence  → stats._iter3sigma_rms
+                                   → rms_vs_eta.iter_rms (per-η-bin + unbinned)
+                                   → residual_hist (for post-clip cut bounds)
+
+        PARAMS / UNIT_SCALE        → stats.py / aggregate.py / plot modules
+
+        PARAM_VALUE_LABELS         → plot axis labels
+        FULL_RANGE_PARAMS          → heatmap _resolve_range
+        HEATMAP_RANGE              → heatmap _resolve_range
+
+        The paper-plot pipeline therefore touches a tight subset of
+        eval_utils:
+            PARAMS, UNIT_SCALE, PARAM_VALUE_LABELS, FULL_RANGE_PARAMS,
+            HEATMAP_RANGE, iterative_rms_convergence, load_acts_augmentation
+        and nothing else. Everything else in eval_utils.py exists for
+        path (B) below.
+
+
+    (B) Legacy standalone-CLI surface (no shipped runner)
+    ─────────────────────────────────────────────────────
+
+        add_common_args(parser)
+            Adds the CLI flags an external evaluator would need
+            (--predictions, --data-dir, --output-dir, --split,
+             --eta-min/--eta-max/--n-eta-bins,
+             --regime-dm-tight-selection).
+
+        load_all_data(args) -> ctx
+            ctx = {
+                "data":            load_predictions(args.predictions),
+                "n_tracks":        int,
+                "ml_residuals":    compute_residuals(data),
+                "acts_reco":       (N, 5)  via load_acts_augmentation,
+                "acts_dm_mask":    (N,) bool,
+                "track_nhits":     (N,) int32,
+                "output_dir":      Path,
+                "eta_range":       (low, high),
+                "n_eta_bins":      int,
+                "regime_dm_tight_selection": bool,
+            }
+
+        build_regime_data(ctx) -> list[(name, kwargs_dict)]
+            Splits ctx into up to 6 "regimes" — each is a different
+            subset of the test set, plotted into its own subdirectory:
+
+                all_selected               every selected track
+                                            (whether ACTS matched or not)
+
+                double_matched             ACTS-matched ∧ DM-flag set
+
+                double_matched_primary_d0  DM ∩ |d0_truth| < 0.25 mm
+                                            (excludes secondary vertices —
+                                             d0 is a narrow primary peak)
+
+                double_matched_secondary_d0
+                                           DM ∩ |d0_truth| ≥ 0.25 mm
+                                            (tail / secondary regime)
+
+                acts_baseline_comparison   pairs SSM and ACTS on the
+                                            ACTS-matched subset for a
+                                            head-to-head ratio table
+
+                dm_tight_selection         DM ∩ tighter kinematic cuts
+                                            (pT≥0.5, |η|≤3, …) — only
+                                            emitted when --regime-dm-tight
+                                            is set
+
+                legacy                     emitted only when no ACTS data
+                                            is available (fallback)
+
+        write_residual_statistics_report(ml_residuals, output_dir,
+                                         ml_label="SSM",
+                                         acts_residuals=None,
+                                         acts_label="ACTS CKF",
+                                         track_nhits=None,
+                                         acts_nhits=None,
+                                         ml_preds=None, ml_targets=None,
+                                         acts_reco_values=None,
+                                         acts_reco_targets=None,
+                                         d0_target=None)
+            Per-regime text report (residual_statistics.txt). Each
+            parameter row prints, ML vs ACTS, side by side:
+                N tracks, mean, std,  MAD,  IQR/1.349,
+                percentile-σ widths (1σ, 2σ, 3σ),
+                Iter. RMSE (3σ clip)  +  cut window + iterations,
+                Gauss fit σ (2σ clip).
+            Pure text — no plotting.
+
+        print_precision_summary(precision, label,
+                                acts_precision=None,
+                                acts_label="ACTS CKF")
+            One-screen stdout dump of unbinned σ values, ML vs ACTS.
+
+    Path (B) has no entry-point script shipped — to use it you would
+    write a small wrapper:
+
+        from track_regression.eval_utils import (
+            add_common_args, load_all_data, build_regime_data,
+            write_residual_statistics_report,
+        )
+        parser = argparse.ArgumentParser(); add_common_args(parser)
+        args = parser.parse_args()
+        ctx = load_all_data(args)
+        for regime_name, kwargs in build_regime_data(ctx):
+            write_residual_statistics_report(**kwargs)
+
+
+--------------------------------------------------------------------------------
+5. End-to-end picture (shipped path)
+--------------------------------------------------------------------------------
+
+    train.py test --ckpt_path …                 (per run; produces h5)
+        │
+        ▼
+    <run_dir>/<best>__test_predictions.h5
+        │
+        │  (cli.py → predictions.py)
+        ▼
+    load_predictions_with_d0_override   reads preds + targets
+        │
+        │  (cli.py → predictions.py)
+        ▼
+    build_dm_residuals
+        ├── eval_utils.load_acts_augmentation    reads acts_reco + DM mask
+        │                                          (the only eval_utils
+        │                                           function the shipped
+        │                                           pipeline uses for I/O)
+        ▼
+    res = { ssm_<p>, ckf_<p>, eta, pt, truth_<p>,
+            pred_ssm_<p>, pred_ckf_<p>, count }
+        │
+        ├── stats.compute_stats
+        │       └── bootstrap_paired(ssm, ckf, fn=_iter3sigma_rms)
+        │             └── eval_utils.iterative_rms_convergence
+        │                   → "rms" = sqrt(mean(x²)) (true RMSE)
+        │
+        ├── rms_vs_eta.make
+        │       └── _binwise(eta, res, edges, fn)  per η bin
+        │             └── eval_utils.iterative_rms_convergence    (per bin)
+        │
+        ├── target_vs_pred.make
+        ├── heatmap_pred_vs_truth.make    (uses HEATMAP_RANGE, FULL_RANGE_PARAMS)
+        ├── residual_vs_pt.make
+        └── residual_hist.make             (uses iterative_rms_convergence
+                                            for cut-window display only)
+
+
+--------------------------------------------------------------------------------
+6. Quick-reference: who returns RMSE vs σ
+--------------------------------------------------------------------------------
+
+    Function                                     Returns
+    --------                                     -------
+    compute_precision_vs_eta(use_rms=False)      σ   (np.std)
+    compute_precision_vs_eta(use_rms=True)       RMSE
+    compute_core_metrics_vs_eta                  both RMSE and σ and IQR
+    iterative_rms_convergence["rms"]             RMSE
+    iterative_rms_convergence["sigma"]           σ of clipped set
+    iterative_gaussfit_convergence["sigma"]      σ from Gaussian fit
+    compute_precision_vs_eta_iterative
+        (method="iterative_rms",      "std" =   RMSE)
+        (method="iterative_gaussfit", "std" =   σ)
+    paper_plots.stats._iter3sigma_rms            RMSE
+    paper_plots.stats._raw_rms                   RMSE
+    paper_plots.stats._iqr_robust_sigma          σ-equivalent  (IQR / 1.349)
+
+    Headline rule: anything the shipped paper-plot pipeline reports as
+    "RMS" or "RMSE" is the bias-sensitive sqrt(mean(x²)). The only
+    field still called "std" comes from compute_precision_vs_eta (the
+    legacy default), and that path is reachable only through the
+    standalone CLI in build_regime_data.
+
+
+--------------------------------------------------------------------------------
+7. Loose ends to be aware of
+--------------------------------------------------------------------------------
+
+    • No `if __name__ == "__main__":` in eval_utils.py — the standalone
+      CLI infrastructure (add_common_args / load_all_data /
+      build_regime_data / write_residual_statistics_report /
+      print_precision_summary, plus compute_precision_vs_eta and
+      compute_core_metrics_vs_eta) is library-only. Its consumer
+      script (the parent repo's evaluate_predictions.py /
+      evaluate_acts_tracking.py) is not vendored.
+
+    • Path alignment between predictions.h5 and acts_reco.npy is
+      positional: row k of preds = row k of acts_reco. Truncation /
+      partial inference is handled by the paper-plot pipeline
+      (predictions.build_dm_residuals warns + clamps) — eval_utils
+      itself does not check.
+
+    • Phi residuals are wrapped to (-π, π] in EVERY builder
+      (compute_residuals, compute_acts_residuals, build_dm_residuals).
+      Don't forget to wrap if you write a new residual builder.
+
+    • Eta is computed from truth-θ, never from prediction-θ, so the
+      per-bin assignments are stable across model variants — the same
+      track lives in the same η bin regardless of how poorly the model
+      predicts θ.

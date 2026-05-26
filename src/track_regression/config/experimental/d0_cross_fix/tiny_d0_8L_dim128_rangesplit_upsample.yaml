@@ -27,7 +27,7 @@ trainer:
   precision: bf16-mixed
   logger:
     init_args:
-      name: TRK-SSMCLS-tinyD0-8L-dim128-rangesplit-upsample19-fromscratch
+      name: TRK-SSMCLS-d0fix-scratch-tiny-8L-dim128-rangesplit-upsample19
 
 model:
   model:

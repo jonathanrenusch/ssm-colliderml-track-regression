@@ -1,5 +1,5 @@
 # =============================================================================
-# Transformer (flash-attn2 + 2 register tokens) + Q7 — FP32 pretrain on p0_core
+# Transformer (SDPA + 2 register tokens) + Q7 — FP32 pretrain on p0_core
 # =============================================================================
 # Sibling of txf_q7_pretrain.yaml.  Single change: num_cls_tokens=2 in the
 # encoder, so the pool readout becomes (B, 2*dim) — matching the
@@ -18,12 +18,12 @@
 # when controlling for readout-token count. 
 # =============================================================================
 trainer:
-  devices: [1]
+  devices: [3]
   max_epochs: 50
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-TXF-Q7-FP32-Core-pretrain-2cls
+      name: TRK-TXF-pretrain-2cls-packed
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -69,7 +69,10 @@ model:
           dim: 192
           num_cls_tokens: 2
           num_layers: 12
-          attn_type: flash-varlen
+          # SDPA (not flash-varlen) — see pretrain_transformer_1cls.yaml
+          # for rationale (encoder runs in fp32, flash-attn-2 is bf16/fp16
+          # only).
+          attn_type: torch
           norm: RMSNorm
           value_residual: false
           qkv_norm: true

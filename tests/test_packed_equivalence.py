@@ -396,3 +396,287 @@ class TestPackedPaddedEquivalence:
             torch.testing.assert_close(
                 pool_reordered[i], pool_orig[src], atol=1e-4, rtol=1e-4,
             )
+
+
+# ---------------------------------------------------------------------------
+# Transformer (EncoderWithCLS): padded vs packed equivalence
+# ---------------------------------------------------------------------------
+#
+# The transformer's padded path runs flash-varlen attention via
+# unpad_input → flash_attn_varlen_func → pad_input.  The packed path
+# skips the unpad/pad round-trip and feeds cu_seqlens straight to
+# flash-varlen.  Mathematically these should be identical for the same
+# per-token inputs (and the kv_mask in padded mode masks out the
+# padded positions so they cannot leak in).  We assert this twice:
+#
+#   1. fp32 / torch backend (no autocast, no flash kernels) — tightest
+#      tolerance, isolates the wrapper logic from kernel rounding.
+#   2. bf16 / flash-varlen — production setting, broader tolerance.
+
+
+def _flash_varlen_available() -> bool:
+    try:
+        from flash_attn import flash_attn_varlen_func  # noqa: F401
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+_REQUIRES_FLASH_VARLEN = pytest.mark.skipif(
+    not _flash_varlen_available(),
+    reason="requires CUDA and flash_attn",
+)
+
+
+def _build_transformer(
+    num_layers: int = 2,
+    dim: int = 64,
+    num_cls_tokens: int = 2,
+    attn_type: str = "torch",
+):
+    from track_regression.transformer_encoder import EncoderWithCLS
+
+    return EncoderWithCLS(
+        dim=dim,
+        num_cls_tokens=num_cls_tokens,
+        num_layers=num_layers,
+        attn_type=attn_type,
+        norm="RMSNorm",
+        value_residual=False,
+        qkv_norm=True,
+        layer_scale=1.0e-5,
+        attn_kwargs={"num_heads": 4},
+        dense_kwargs={"hidden_dim_scale": 4},
+        # Posenc on — exercises the shared _apply_posenc helper.
+        posenc_fourier_scales=[-3, -2, -1, 0, 1, 2, 3],
+        posenc_fourier_base=2,
+        posenc_time_scale=1.0,
+        posenc_init_scale=0.02,
+    )
+
+
+def _build_padded_and_packed_transformer_inputs(
+    track_lengths: list[int], dim: int, seed: int = 7,
+):
+    """Build matching padded ``(B, max_L, D)`` / packed ``(1, total_L, D)``
+    inputs *and* their per-token ``hit_time`` tensors.  Each track's
+    hits are in (strictly increasing) time order, matching the on-disk
+    convention the packed collate respects.
+    """
+    torch.manual_seed(seed)
+    B = len(track_lengths)
+    max_L = max(track_lengths)
+    total_L = sum(track_lengths)
+
+    # Per-track tokens + strictly increasing per-track time.
+    track_tokens: list[torch.Tensor] = []
+    track_times: list[torch.Tensor] = []
+    for L in track_lengths:
+        track_tokens.append(torch.randn(L, dim))
+        # Strictly increasing in [0, 5) ns — matches collate_tracks_packed's
+        # assumption that on-disk hits are time-sorted per segment.
+        t = torch.sort(torch.rand(L) * 5.0).values
+        track_times.append(t)
+
+    # Padded layout.
+    padded = torch.zeros(B, max_L, dim)
+    padded_time = torch.zeros(B, max_L)
+    padded_valid = torch.zeros(B, max_L, dtype=torch.bool)
+    for i, (tok, tim) in enumerate(zip(track_tokens, track_times, strict=True)):
+        L = tok.shape[0]
+        padded[i, :L] = tok
+        padded_time[i, :L] = tim
+        padded_valid[i, :L] = True
+
+    # Packed layout.
+    packed = torch.cat(track_tokens, dim=0).unsqueeze(0)            # (1, total_L, D)
+    packed_time = torch.cat(track_times, dim=0).unsqueeze(0)        # (1, total_L)
+    cu_seqlens = torch.zeros(B + 1, dtype=torch.int32)
+    cu_seqlens[1:] = torch.cumsum(
+        torch.tensor(track_lengths, dtype=torch.int32), 0,
+    )
+    seq_idx = torch.empty(1, total_L, dtype=torch.int32)
+    off = 0
+    for i, L in enumerate(track_lengths):
+        seq_idx[0, off:off + L] = i
+        off += L
+
+    return {
+        "padded": padded,
+        "padded_time": padded_time,
+        "padded_valid": padded_valid,
+        "packed": packed,
+        "packed_time": packed_time,
+        "cu_seqlens": cu_seqlens,
+        "seq_idx": seq_idx,
+    }
+
+
+class TestPackedPaddedEquivalenceTransformer:
+    """End-to-end equivalence between the padded and packed transformer paths."""
+
+    def test_variable_length_fp32_torch_matches(self):
+        """fp32 + torch attention: padded ≡ packed to ~1e-6.
+
+        Runs on CPU so it executes even without flash-attn / CUDA — the
+        wrapper logic is what we're isolating here.
+        """
+        device = torch.device("cpu")
+        dim = 64
+        encoder = _build_transformer(
+            num_layers=2, dim=dim, num_cls_tokens=2, attn_type="torch",
+        ).to(device).eval()
+
+        track_lengths = [8, 14, 6, 11]
+        bundle = _build_padded_and_packed_transformer_inputs(
+            track_lengths, dim, seed=11,
+        )
+
+        with torch.no_grad():
+            _, padded_pool = encoder(
+                bundle["padded"].to(device),
+                x_sort_value=bundle["padded_time"].to(device),
+                kv_mask=bundle["padded_valid"].to(device),
+            )
+            _, packed_pool = encoder(
+                bundle["packed"].to(device),
+                x_sort_value=bundle["packed_time"].to(device),
+                seq_idx=bundle["seq_idx"].to(device),
+                cu_seqlens=bundle["cu_seqlens"].to(device),
+            )
+
+        torch.testing.assert_close(
+            packed_pool, padded_pool, atol=1e-5, rtol=1e-5,
+        )
+
+    @_REQUIRES_FLASH_VARLEN
+    def test_variable_length_bf16_flash_varlen_matches(self):
+        """bf16 autocast + flash-varlen: padded ≡ packed to ~1e-3.
+
+        Production setting.  Both paths invoke ``flash_attn_varlen_func``;
+        the padded path adds an unpad/pad round-trip on top.  Outputs
+        should agree to a tolerance that absorbs bf16 round-off in the
+        attention kernel.
+        """
+        device = torch.device("cuda")
+        dim = 64
+        encoder = _build_transformer(
+            num_layers=2, dim=dim, num_cls_tokens=2, attn_type="flash-varlen",
+        ).to(device).eval()
+
+        track_lengths = [8, 14, 6, 11]
+        bundle = _build_padded_and_packed_transformer_inputs(
+            track_lengths, dim, seed=13,
+        )
+
+        autocast = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+        with torch.no_grad(), autocast:
+            _, padded_pool = encoder(
+                bundle["padded"].to(device),
+                x_sort_value=bundle["padded_time"].to(device),
+                kv_mask=bundle["padded_valid"].to(device),
+            )
+            _, packed_pool = encoder(
+                bundle["packed"].to(device),
+                x_sort_value=bundle["packed_time"].to(device),
+                seq_idx=bundle["seq_idx"].to(device),
+                cu_seqlens=bundle["cu_seqlens"].to(device),
+            )
+
+        torch.testing.assert_close(
+            packed_pool.float(), padded_pool.float(), atol=1e-3, rtol=1e-3,
+        )
+
+    def test_packed_path_is_segment_local(self):
+        """Reordering packed segments must permute the rows of the pooled
+        output identically. Catches any global op that leaks across
+        segments (e.g. a stray ``argsort`` across the packed dim).
+        """
+        device = torch.device("cpu")
+        dim = 64
+        encoder = _build_transformer(
+            num_layers=2, dim=dim, num_cls_tokens=2, attn_type="torch",
+        ).to(device).eval()
+
+        track_lengths = [5, 9, 7]
+        bundle = _build_padded_and_packed_transformer_inputs(
+            track_lengths, dim, seed=17,
+        )
+        packed = bundle["packed"].to(device)
+        packed_time = bundle["packed_time"].to(device)
+        cu = bundle["cu_seqlens"].to(device)
+        seq_idx = bundle["seq_idx"].to(device)
+
+        with torch.no_grad():
+            _, pool_orig = encoder(
+                packed, x_sort_value=packed_time, seq_idx=seq_idx, cu_seqlens=cu,
+            )
+
+        new_order = [2, 0, 1]
+        new_lengths = [track_lengths[i] for i in new_order]
+
+        # Slice out each segment and re-concatenate in the new order.
+        seg_tokens: list[torch.Tensor] = []
+        seg_times: list[torch.Tensor] = []
+        for i in range(len(track_lengths)):
+            a, b = int(cu[i].item()), int(cu[i + 1].item())
+            seg_tokens.append(packed[0, a:b])
+            seg_times.append(packed_time[0, a:b])
+        new_packed = torch.cat(
+            [seg_tokens[i] for i in new_order], dim=0,
+        ).unsqueeze(0)
+        new_time = torch.cat(
+            [seg_times[i] for i in new_order], dim=0,
+        ).unsqueeze(0)
+        new_cu = torch.zeros(len(new_lengths) + 1, dtype=torch.int32, device=device)
+        new_cu[1:] = torch.cumsum(
+            torch.tensor(new_lengths, dtype=torch.int32, device=device), 0,
+        )
+        new_seq_idx = torch.empty(
+            1, sum(new_lengths), dtype=torch.int32, device=device,
+        )
+        off = 0
+        for i, L in enumerate(new_lengths):
+            new_seq_idx[0, off:off + L] = i
+            off += L
+
+        with torch.no_grad():
+            _, pool_reordered = encoder(
+                new_packed,
+                x_sort_value=new_time,
+                seq_idx=new_seq_idx,
+                cu_seqlens=new_cu,
+            )
+
+        for i, src in enumerate(new_order):
+            torch.testing.assert_close(
+                pool_reordered[i], pool_orig[src], atol=1e-5, rtol=1e-5,
+            )
+
+    def test_packed_gradients_flow_through_cls_token(self):
+        """The CLS parameter must receive non-zero gradient in packed mode.
+        Argsort-based interleave is grad-safe; an in-place write into a
+        zeros tensor would silently sever the graph here.
+        """
+        device = torch.device("cpu")
+        dim = 64
+        encoder = _build_transformer(
+            num_layers=2, dim=dim, num_cls_tokens=2, attn_type="torch",
+        ).to(device).train()
+
+        track_lengths = [5, 9, 7]
+        bundle = _build_padded_and_packed_transformer_inputs(
+            track_lengths, dim, seed=19,
+        )
+        packed = bundle["packed"].to(device).requires_grad_(True)
+
+        _, pool = encoder(
+            packed,
+            x_sort_value=bundle["packed_time"].to(device),
+            seq_idx=bundle["seq_idx"].to(device),
+            cu_seqlens=bundle["cu_seqlens"].to(device),
+        )
+        pool.float().sum().backward()
+
+        assert encoder.cls_token.grad is not None
+        assert encoder.cls_token.grad.abs().sum().item() > 0.0

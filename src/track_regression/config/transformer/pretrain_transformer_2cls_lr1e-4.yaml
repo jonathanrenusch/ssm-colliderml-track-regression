@@ -1,28 +1,29 @@
 # =============================================================================
-# SSM (Mamba-2 state) + Q7 "safety" config — fp32 pretrain on p200_core
+# Transformer (SDPA + 2 register tokens) + Q7 — FP32 pretrain on p0_core
+# Sibling of pretrain_transformer_2cls.yaml — peak LR bumped 5e-5 → 1e-4.
 # =============================================================================
-# Exact loss configuration from alt_study4_direct_quantile_eta.yaml:
-#   - 7 quantiles [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
-#   - Uniform weights (all 1.0), no qop_tail_weight / qop_scale
-#   - Original (tighter) norm bounds: d0 [-1,1], z0 [-150,150], eta [-3,3], qop [-2,2]
-#   - phi: circular with beta=0.01
-# This is the proven baseline — kept as a safe fallback baseline.
+# Purpose: per-architecture LR ablation point. The headline 2cls recipe was
+# inherited from the SSM-CLS pretrain (Lion + OneCycle, peak 5e-5), which
+# was selected on the SSM. Transformers under Lion at this scale typically
+# prefer a noticeably higher peak LR; this config tests whether the
+# transformer is simply undertrained at 50 epochs / 5e-5.
 #
-# Stability: LR rolled back to alt_study4 exact (max 5.0e-05, onecycle, Lion
-# default betas) — the schedule alone keeps training stable.
+# Single delta vs pretrain_transformer_2cls.yaml:
+#   - lrs_config.max: 5.0e-5 → 1.0e-4
+#
+# Everything else (dim, encoder shape, num_cls_tokens=2, layer_scale=1e-5,
+# value_residual=false, loss weights, BS, schedule shape, data) is held
+# byte-identical so the LR axis is isolated. If the gap to SSM-CLS shrinks
+# meaningfully under this LR, repeat with peak=3e-4 next; if not, the
+# original recipe was not the bottleneck.
 # =============================================================================
-
-# Pre-trained checkpoint shipped at checkpoints/pretrain_ssm_state/best.ckpt.
-# Pass it to `train.py test --ckpt_path ...` for evaluation; leave null here so
-# `train.py fit` trains from scratch.
-ckpt_path: null
 trainer:
-  devices: [0]
+  devices: [1]
   max_epochs: 50
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSM-Q7-FP32-Core-pretrain
+      name: TRK-TXF-pretrain-2cls-packed-lr1e-4
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -57,24 +58,29 @@ trainer:
 model:
   model:
     init_args:
-      pool: ssm_state
-      # Run the SSM encoder in full fp32 (override the bf16 base default).
-      # The Mamba-2 selective-scan fp32 path closes the residual z0/theta/qop
-      # core-resolution gap vs ACTS CKF.
-      encoder_autocast_dtype: float32
+      dim: 192
+      pool: register_token
+      input_net_hidden_layers: [192]
+      output_head_hidden_layers: [256]
+      output_head_init_scale: 0.01
       encoder:
-        class_path: track_regression.mamba_state.BidirectionalMambaEncoder
+        class_path: track_regression.transformer_encoder.EncoderWithCLS
         init_args:
-          num_layers: 8
-          dim: 128
-          d_state: 32
-          d_conv: 4
-          expand: 2
-          headdim: 32
-          ngroups: 1
-          chunk_size: 16
+          dim: 192
+          num_cls_tokens: 2
+          num_layers: 12
+          attn_type: torch
           norm: RMSNorm
-          dropout: 0.0
+          value_residual: false
+          qkv_norm: true
+          layer_scale: 1.0e-5
+          attn_kwargs:
+            num_heads: 6
+          dense_kwargs:
+            hidden_dim_scale: 4
+          posenc_fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+          posenc_fourier_base: 2
+          posenc_time_scale: 1.0
       loss_module:
         class_path: track_regression.losses.TrackParameterLoss
         init_args:
@@ -108,10 +114,11 @@ model:
               norm_min: -2.0
               norm_max: 2.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+
   optimizer: Lion
   lrs_config:
     initial: 1.0e-05
-    max: 5.0e-05
+    max: 1.0e-04
     end: 1.0e-06
     pct_start: 0.10
     weight_decay: 1.0e-03

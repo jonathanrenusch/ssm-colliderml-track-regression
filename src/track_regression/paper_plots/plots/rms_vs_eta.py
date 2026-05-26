@@ -1,4 +1,5 @@
-"""RMS vs η, SSM vs CKF, pre-clip + iter-3σ, with bootstrap 2σ band.
+"""RMSE vs η, SSM vs CKF, pre-clip + iter-3σ, with ±2·SE_boot band
+(normal-approximation 95% CI; not the 2.5/97.5 percentile bootstrap).
 
 - `individuals/rms_vs_eta_<p>.{pdf,png}` — per-param
 - `rms_vs_eta_summary.{pdf,png}`        — 2×3 (5 params + η step hist)
@@ -175,7 +176,7 @@ def _draw_one(ax, eta, ssm, ckf, p, *, n_boot, scale, unit, mode="both", compact
                             (ckf_pre + 2 * ckf_pre_s) * scale,
                             color="C3", alpha=0.20)
     ax.set_xlabel(r"truth $\eta$")
-    ax.set_ylabel(f"RMS({p}) [{DISPLAY_UNIT[p]}]")
+    ax.set_ylabel(f"RMSE({p}) [{DISPLAY_UNIT[p]}]")
     ax.set_xlim(-3, 3)
     ax.set_ylim(bottom=0)
     ax.set_title(p)
@@ -188,11 +189,11 @@ def make(res: dict, plots_dir: Path, *, n_boot: int = 50) -> None:
     # Three modes: combined (both lines), pre-clip only, post-clip only.
     MODES = [
         ("both",     "rms_vs_eta_summary",
-         "RMS vs η — pre-clip + iter-3σ"),
+         "RMSE vs η — pre-clip + iter-3σ"),
         ("preclip",  "rms_vs_eta_summary_preclip",
-         "RMS vs η — pre-clip only (tail-inclusive)"),
+         "RMSE vs η — pre-clip only (tail-inclusive)"),
         ("postclip", "rms_vs_eta_summary_postclip",
-         "RMS vs η — iter-3σ-clipped core only"),
+         "RMSE vs η — iter-3σ-clipped core only"),
     ]
 
     # Per-param singles, one file per (param, mode)
@@ -233,7 +234,7 @@ def make(res: dict, plots_dir: Path, *, n_boot: int = 50) -> None:
         handles, labels = _style_legend_handles(mode)
         fig.legend(handles, labels, loc="upper center", ncol=len(labels),
                    fontsize=9, frameon=False, bbox_to_anchor=(0.5, 0.985))
-        fig.suptitle(f"{title} — bands = bootstrap ±2σ — DM, "
+        fig.suptitle(f"{title} — bands = ±2·SE_boot (normal-approx 95% CI) — DM, "
                      f"N={res['count']:,}", y=1.02)
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         save_fig(fig, plots_dir, stem)

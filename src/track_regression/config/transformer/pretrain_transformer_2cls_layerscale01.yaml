@@ -1,23 +1,44 @@
 # =============================================================================
-# finetune_ssm_cls_lion_packed — Phase 2 packed-batch finetune (opt-in).
+# Transformer (SDPA + 2 register tokens) + Q7 — FP32 pretrain on p0_core
+# Sibling of pretrain_transformer_2cls.yaml — completes the LR × layer_scale
+# 2×2 grid. Single-axis layer_scale ablation at the SSM-tuned LR.
 # =============================================================================
-# Identical to finetune_ssm_cls_lion.yaml except `data.packed_batches: true`.
-# See pretrain_ssm_cls_packed.yaml for the rationale and equivalence
-# caveat. Warm-starts from the (packed-trained) pretrain_ssm_cls_packed
-# checkpoint — set `pretrained_ckpt_path` below before launching.
+# Together with the baseline, _lr1e-4, and _tuned_lr1e-4 siblings, this
+# fills the 4th cell of the 2×2 ablation:
+#
+#                | layer_scale=1e-5 | layer_scale=0.1 (CaiT)
+#   LR=5e-5     | baseline (2cls)  | THIS CONFIG
+#   LR=1e-4     | _lr1e-4          | _tuned_lr1e-4
+#
+# Reads:
+#   - baseline → THIS:   pure layer_scale effect at low LR
+#   - _lr1e-4 → _tuned:  pure layer_scale effect at high LR
+#   - difference of the two: LR × layer_scale interaction
+# Without this cell the interaction is unmeasurable.
+#
+# Single delta vs pretrain_transformer_2cls.yaml:
+#   - encoder.layer_scale: 1.0e-5 → 1.0e-1
+#
+# Why 0.1 specifically: CaiT (Touvron et al. 2021, "Going deeper with image
+# transformers", arXiv 2103.17239) Section 2 prescribes ε=0.1 for depth
+# ≤18, ε=1e-5 for depth=24, ε=1e-6 for depth ≥36. At our 12 layers the
+# inherited 1e-5 is the depth-24 value, applied 4 orders of magnitude
+# off-schedule.
+#
+# Everything else (LR, value_residual, qkv_norm, dim, num_layers,
+# num_cls_tokens, optimiser, schedule, loss weights, BS, data) is held
+# byte-identical to the baseline so the layer_scale axis is isolated.
+# Padded batches (default in transformer/base.yaml) + attn_type=torch
+# (SDPA) preserves the fp32 architecture comparison vs SSM-CLS without
+# the packed-mode SDPA slowdown.
 # =============================================================================
-
 trainer:
-  devices: [2, 3]
+  devices: [1]
   max_epochs: 50
-  precision: 32-true
-  gradient_clip_val: 1.0
-  reload_dataloaders_every_n_epochs: 1
-  benchmark: true
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-Q7-unbottleneck-residinit-B-Lion-WSD-FP32-finetune-PACKED
+      name: TRK-TXF-pretrain-2cls-packed-layerscale01
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -26,14 +47,6 @@ trainer:
       init_args:
         log_every_n_steps: 50
         log_parameter_stats: false
-        log_layer_stats: true
-        log_output_head_per_dim: true
-        output_head_param_groups:
-          d0: [0, 7]
-          z0: [7, 14]
-          phi: [14, 16]
-          theta: [16, 23]
-          qop: [23, 30]
     - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
         log_every_n_steps: 50
@@ -51,43 +64,38 @@ trainer:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/total
-        patience: 30
+        patience: 50
         min_delta: 0.0
         mode: min
         verbose: true
         check_on_train_epoch_end: false
 
 model:
-  pretrained_ckpt_path: null
-  optimizer: Lion
-  lrs_config:
-    schedule: wsd
-    initial: 1.5e-06
-    max: 1.5e-05
-    end: 5.0e-07
-    pct_start: 0.02
-    decay_pct: 0.5
-    weight_decay: 1.0e-03
-    skip_scheduler: false
-
   model:
     init_args:
-      state_head_output_dim: 128
-      state_head_hidden_layers: [192]
-      state_head_dropout: 0.0
+      dim: 192
+      pool: register_token
+      input_net_hidden_layers: [192]
+      output_head_hidden_layers: [256]
+      output_head_init_scale: 0.01
       encoder:
-        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        class_path: track_regression.transformer_encoder.EncoderWithCLS
         init_args:
-          num_layers: 10
           dim: 192
-          d_state: 32
-          d_conv: 4
-          expand: 2
-          headdim: 32
-          ngroups: 1
-          chunk_size: 16
+          num_cls_tokens: 2
+          num_layers: 12
+          attn_type: torch
           norm: RMSNorm
-          dropout: 0.0
+          value_residual: false
+          qkv_norm: true
+          layer_scale: 1.0e-1
+          attn_kwargs:
+            num_heads: 6
+          dense_kwargs:
+            hidden_dim_scale: 4
+          posenc_fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+          posenc_fourier_base: 2
+          posenc_time_scale: 1.0
       loss_module:
         class_path: track_regression.losses.TrackParameterLoss
         init_args:
@@ -122,12 +130,16 @@ model:
               norm_max: 2.0
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
 
+  optimizer: Lion
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
 data:
-  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
-  load_acts: true
-  batch_size: 20000
-  num_workers: 1
-  pin_memory: true
-  streaming: true
-  shard_buffer_size: 50
-  packed_batches: true
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
+  batch_size: 2048
+  num_workers: 8

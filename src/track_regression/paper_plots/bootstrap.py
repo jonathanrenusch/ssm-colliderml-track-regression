@@ -12,7 +12,13 @@ def bootstrap_metric(
     n: int = 200,
     seed: int = 0,
 ) -> tuple[float, float]:
-    """Return (mean, std) of `fn` evaluated on `n` bootstrap resamples."""
+    """Return (mean, SE_boot) of `fn` evaluated on `n` bootstrap resamples.
+
+    ``mean`` is the mean of the bootstrap distribution and ``SE_boot`` is its
+    standard deviation (= bootstrap standard error). ``mean ± 2·SE_boot`` is a
+    normal-approximation 95 % CI; for the percentile-bootstrap CI take the
+    2.5/97.5 percentiles of the bootstrap distribution instead.
+    """
     if len(values) == 0:
         return float("nan"), float("nan")
     rng = np.random.default_rng(seed)
@@ -33,7 +39,11 @@ def bootstrap_paired(
 ) -> dict:
     """Bootstrap a metric on two paired arrays + their ratio.
 
-    Returns ``{"a": (mean, std), "b": (mean, std), "ratio": (mean, std)}``.
+    Returns ``{"a": (mean, SE), "b": (mean, SE), "ratio": (mean, SE)}`` where
+    ``mean`` is the mean of the bootstrap distribution (≈ ``fn(original)`` at
+    large N) and ``SE`` is the bootstrap standard error (std of the bootstrap
+    distribution). Multiplying SE by 2 gives a normal-approximation 95 % CI;
+    this is NOT the 2.5/97.5 percentile bootstrap CI.
     Uses the SAME resample indices for a and b so the ratio is properly paired.
     """
     if len(a) == 0 or len(a) != len(b):

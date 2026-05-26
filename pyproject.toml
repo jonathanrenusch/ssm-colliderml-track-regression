@@ -1,5 +1,5 @@
 [project]
-authors = [{name = "Jonathan Renusch", email = "jonathan.renusch@cern.ch"}]
+authors = [{name = "Jonathan Renusch"}]
 description = "Bidirectional state space models for charged-particle trajectory regression"
 license = { text = "GPL-3.0-or-later" }
 readme = "README.md"

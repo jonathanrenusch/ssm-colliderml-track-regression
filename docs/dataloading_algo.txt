@@ -1,0 +1,400 @@
+================================================================================
+  ColliderMLRegrDataModule  —  end-to-end dataloading walkthrough
+================================================================================
+
+Source: src/track_regression/data.py
+Producer: src/track_regression/scripts/preprocess_colliderml_compact.py
+          (writes the on-disk format described below)
+Consumer: src/track_regression/model.py (TrackRegressionWrapper) — reads the
+          (inputs, targets) tuples emitted by collate_tracks{_packed}.
+
+
+--------------------------------------------------------------------------------
+0. On-disk layout — what the preprocessor writes
+--------------------------------------------------------------------------------
+
+    $DATA_ROOT/<variant>/                              (e.g. p0_core_pretrain)
+    │
+    ├── manifest.json                                  preprocessor settings
+    ├── split.json                                     {"train":[…], "val":[…],
+    │                                                   "test":[…]} shard ids
+    │                                                  (written by create_split)
+    │
+    └── shard_XXXX/                                    one shard per source file
+        │
+        ├── hits.npy                                   (N_hits, 12) float32
+        │     CSR-packed: every hit of every selected
+        │     track in this shard, in on-disk order.
+        │     Columns:
+        │       0..2  x, y, z         [mm]
+        │       3     r               [mm]
+        │       4, 5  phi_hit, theta_hit  [rad]
+        │       6     s                 [mm]  signed arc-length from IP
+        │       7..10 volume_id, layer_id, surface_id, detector
+        │       11    eta_hit
+        │
+        ├── hit_times.npy                              (N_hits,) float32
+        │     Truth-time sidecar — monotonic in
+        │     on-helix arc length, used as the
+        │     encoder sort key.
+        │
+        ├── _complete                                  sentinel — shard is OK
+        │
+        └── selected_tracks/                           per-track arrays
+            │   (one row per selected track in this shard)
+            │
+            ├── track_targets.npy                      (N_trk, 5) float32
+            │     [d0, z0, phi, theta, qop] truth values
+            │
+            ├── track_hit_offsets.npy                  (N_trk + 1,) int64
+            │     CSR offsets — track t occupies
+            │     hit_indices[offsets[t] : offsets[t+1]]
+            │
+            ├── track_hit_indices.npy                  (sum_L,) int64
+            │     row indices into the shard's hits.npy
+            │     for the hits of each selected track
+            │
+            ├── acts_reco.npy            (optional)    (N_trk, 5) float32
+            │     ACTS-CKF reconstructed [d0,…,qop]
+            │     written when preprocess --augment-acts is on
+            │
+            ├── acts_dm_mask.npy         (optional)    (N_trk,)   bool
+            │     True iff ACTS double-matched this
+            │     track (purity>0.75 AND hit-eff>0.75)
+            │
+            └── track_meta.npy           (optional)    (N_trk, 2) float32
+                  [pt, vertex_primary]
+
+Selection (min/max hits, kinematic, perigee) is applied at preprocessing
+time. The dataset blindly loads every track stored on disk.
+
+
+--------------------------------------------------------------------------------
+1. Read-path primitives — _open_shard + _load_track
+--------------------------------------------------------------------------------
+
+_open_shard(preprocessed_dir, si, load_acts) -> dict[str, np.ndarray]
+    Opens np.load(mmap_mode="r") handles on every required array for
+    shard ``si`` and returns the dict. Mmaps mean the bytes hit RAM
+    lazily, page-by-page, when slices are taken.
+
+    Required keys (always): hits, hit_times, targets, offsets,
+                            hit_indices
+    Optional (if load_acts): acts_reco, acts_dm_mask, track_meta
+
+_load_track(data, local_idx) -> dict
+    Turns one track inside one open shard into a dict of np.ndarray:
+
+        start = data["offsets"][local_idx]
+        end   = data["offsets"][local_idx + 1]
+        hit_idx = data["hit_indices"][start:end]            # (L,)
+        hit_features = data["hits"][hit_idx]                # (L, 12)
+        hit_s        = hit_features[:, 6].copy()
+        hit_time     = data["hit_times"][hit_idx]           # (L,)
+        targets      = data["targets"][local_idx]           # (5,)
+
+    Output:
+        {
+            "hit_features": (L, 12) float32,
+            "hit_s":        (L,)    float32,
+            "hit_time":     (L,)    float32,
+            "targets":      (5,)    float32,
+            "length":       int L,
+            # optional, when load_acts:
+            "acts_reco":    (5,)    float32,
+            "acts_dm":      bool,
+            "track_pt":     float,
+            "track_vertex_primary": float,
+        }
+
+    Legacy compatibility: if hit_features has 11 columns (no eta_hit),
+    derive eta_hit = -ln(tan(theta_hit/2)) and append on the fly so old
+    shards still round-trip.
+
+
+--------------------------------------------------------------------------------
+2. Two Dataset classes — pick one per training run
+--------------------------------------------------------------------------------
+
+A) ColliderMLTrackDataset  (map-style, eager full-index build)
+   -------------------------------------------------------------
+   Use when:  validation / test;
+              train if dataset fits in RAM-resident mmap pages and you
+              want shuffle=True + arbitrary __getitem__ access (also
+              the path that supports the tail-upsample sampler).
+
+   __init__(preprocessed_dir, shard_indices, load_acts):
+     for each shard in shard_indices:
+         _open_shard(...)                       # mmap handles
+         for t in range(n_tracks):
+             self._global_index.append((shard_idx, t))
+
+   __len__()        -> total selected tracks across all shards
+   __getitem__(idx) -> _load_track(self._shard_data[shard_idx], local_idx)
+
+   Memory: O(N_tracks) Python tuples for _global_index plus mmap headers.
+   Disk reads are lazy — only the pages your __getitem__ touches.
+
+
+B) ColliderMLStreamingDataset  (IterableDataset, sliding shard window)
+   -------------------------------------------------------------------
+   Use when:  training on datasets too big to hold all shards mmapped
+              at once (the SSM-CLS p200 fine-tune configs and the
+              d0_cross_fix runs).
+
+   Per-epoch loop (each (rank, worker) runs the same deterministic
+   computation, no inter-rank comms needed):
+
+       rng = np.random.RandomState(seed + epoch)
+       shards_for_rank   = rng.shuffle(shard_indices)[rank::world_size]
+       shards_for_worker = shards_for_rank[worker_id::num_workers]
+
+       # DDP cap: every rank yields exactly the same number of tracks
+       # (the per-epoch minimum across ranks) to prevent NCCL deadlocks
+       # on rank-imbalanced shard counts.
+       worker_max = compute_balanced_cap(...)
+
+       for chunk in batches_of(shards_for_worker, size=shard_buffer_size):
+           open mmaps for every shard in chunk
+           track_index = [(si, t) for si in chunk for t in shard.tracks]
+           chunk_rng.shuffle(track_index)
+           for (si, t) in track_index:
+               yield _load_track(shard_data[si], t)
+           del shard_data, track_index
+           gc.collect()                         # drop chunk mmaps
+
+   Key parameters:
+     shard_buffer_size  — how many shards live in mmap at once
+                          (typical: 50 for the p0_core_pretrain runs).
+     seed + epoch       — guarantees deterministic shuffle across runs.
+     set_epoch(epoch)   — MUST be called from the DataModule before
+                          worker fork so child workers see the new epoch.
+
+   Memory: O(shard_buffer_size) shards' mmap headers + their hot pages.
+   Throughput: shard chunks land in OS page cache as the loop reads them;
+               subsequent epochs reuse the cache if it fits.
+
+
+--------------------------------------------------------------------------------
+3. Collate — two output formats, same per-track schema
+--------------------------------------------------------------------------------
+
+The chosen collate fn is selected at DataModule init from
+``packed_batches: bool``.
+
+A) collate_tracks  (padded, default)                  packed_batches=False
+   ------------------------------------
+   For a batch of B variable-length tracks with lengths L_i and
+   max_L = max(L_i):
+
+       hit_features  (B, max_L, 12)  float32       padding rows = 0
+       hit_s         (B, max_L)      float32       padding = 0
+       hit_time      (B, max_L)      float32       padding = 0
+       hit_valid     (B, max_L)      bool          True up to L_i, else False
+
+       d0, z0, phi, theta, qop : each (B,) float32
+       track_valid             : (B,) bool, all True
+       innermost_phi, innermost_theta : (B,) float32
+           extracted at the argmin-time position of each row
+           (padding masked to +inf so it can never win the argmin).
+
+       # optional, when load_acts=True on the source Dataset:
+       acts_reco_{d0,z0,phi,theta,qop} : each (B,) float32
+       acts_dm_mask                    : (B,) bool
+
+   Compute scales with max_L per batch. Padding wastes O((max_L − mean_L)·B)
+   tokens — acceptable for ≤20-hit tracks, but Mamba's intra-chunk matmul
+   wastes more (~quadratic in chunk_size on padding); see chunk_size=16
+   note in CLAUDE.md.
+
+B) collate_tracks_packed  (packed)                    packed_batches=True
+   --------------------------------
+   All hits across the batch concatenated into a single row.
+   total_L = sum(L_i).
+
+       hit_features  (1, total_L, 12)  float32
+       hit_s         (1, total_L)      float32
+       hit_time      (1, total_L)      float32
+       seq_idx       (1, total_L)      int32     per-token track id 0..B-1
+       cu_seqlens    (B + 1,)          int32     cumulative segment ends
+                                                 [0, L_0, L_0+L_1, …,
+                                                  total_L]
+       track_lengths (B,)              int32     convenience copy
+
+       Targets and innermost_* identical schema to the padded path.
+
+   No padding tokens ever emitted, so encoder compute scales with mean_L
+   instead of max_L. Supported by:
+     - SSM-CLS (BidirectionalMambaCLSEncoder, consumes cu_seqlens +
+       seq_idx and reverses segments via _segment_flip_indices — see
+       mamba_cls_packed_algo.txt).
+     - Transformer (EncoderWithCLS._forward_packed, interleaves CLS at
+       each segment start and feeds an augmented cu_seqlens straight
+       to flash_attn_varlen_func — no unpad/pad round-trip).
+
+
+--------------------------------------------------------------------------------
+4. Stratified tail sampler — d0 cross-fix only path
+--------------------------------------------------------------------------------
+
+Activated when the DataModule receives
+    tail_upsample_threshold_mm > 0  AND  tail_upsample_weight != 1.0
+(non-streaming path only — streaming train loader has its own sampling).
+
+setup() builds two index groups over the train shards:
+    tail_idx = where(|truth d0| >  threshold_mm)
+    core_idx = where(|truth d0| <= threshold_mm)
+
+The effective per-epoch tail fraction is derived from the natural counts
+and the requested weight:
+    f_target = w * n_tail / (w * n_tail + n_core)
+
+Example: natural n_tail/(n_tail + n_core) ≈ 5%, w = 19  →  f_target ≈ 50%.
+
+Each epoch _StratifiedTailSampler yields num_samples (=len(dataset))
+indices, with f_target of them drawn uniformly with replacement from
+tail_idx and the rest from core_idx (numpy RNG, no torch.multinomial 2^24
+cap). Output is shuffled so batches are well-mixed.
+
+This is the mechanism behind tiny_d0_8L_dim128_rangesplit_upsample.yaml:
+without it the natural 95/5 imbalance forces the d0 head to collapse to
+the beamspot mode for every track.
+
+
+--------------------------------------------------------------------------------
+5. DataModule.setup() — what runs at fit / test stage entry
+--------------------------------------------------------------------------------
+
+setup(stage):
+    split = json.load("$preprocessed_dir/split.json")    # train/val/test
+
+    if stage in (None, "fit"):
+        train_shards = split["train"][:num_train_shards_limit]
+
+        if streaming:
+            self._train_ds = ColliderMLStreamingDataset(
+                preprocessed_dir, train_shards,
+                load_acts=False, shard_buffer_size=...)
+        else:
+            self._train_ds = ColliderMLTrackDataset(
+                preprocessed_dir, train_shards, load_acts=False)
+
+            if tail_upsample_threshold_mm > 0 and tail_upsample_weight != 1:
+                build _tail_sampler from d0 column of every train shard
+
+        self._val_ds = ColliderMLTrackDataset(
+            preprocessed_dir, split["val"], load_acts=load_acts)
+
+    if stage in (None, "test"):
+        self._test_ds = ColliderMLTrackDataset(
+            preprocessed_dir, split["test"], load_acts=load_acts)
+
+Train never loads ACTS data (val-time metrics need it for DM subsets;
+training loss does not).
+
+
+--------------------------------------------------------------------------------
+6. DataLoader wiring — per-stage
+--------------------------------------------------------------------------------
+
+train_dataloader():
+    if streaming:
+        ds.set_epoch(trainer.current_epoch)              # before fork!
+
+        if DDP:
+            # Make every rank do exactly the same number of steps to
+            # avoid NCCL deadlock. Recompute the per-rank minimum here
+            # and set trainer.limit_train_batches accordingly.
+            safe_batches = min_rank_total // batch_size
+            trainer.limit_train_batches = safe_batches
+
+        return DataLoader(
+            ds,
+            shuffle=False,                               # streaming handles it
+            num_workers=…, drop_last=True,
+            collate_fn=collate_tracks{_packed},
+            persistent_workers=False,                    # set_epoch needs re-fork
+        )
+    else:
+        return DataLoader(
+            ds,
+            sampler=_tail_sampler  if   tail upsample on
+                    else None      and  shuffle=True,
+            num_workers=…, drop_last=True,
+            collate_fn=collate_tracks{_packed},
+            persistent_workers=(num_workers > 0),
+        )
+
+val_dataloader() / test_dataloader():
+    shuffle=False, drop_last not set (default False), persistent_workers=False
+    (avoids pin_memory + persistent_workers + reload_dataloaders deadlock
+    flagged in pytorch#91252).
+
+Required Trainer setting for streaming training:
+    reload_dataloaders_every_n_epochs: 1
+    → forces Lightning to call train_dataloader() each epoch so
+      set_epoch(current_epoch) takes effect before worker fork.
+
+
+--------------------------------------------------------------------------------
+7. DDP + streaming subtleties — why the cap exists
+--------------------------------------------------------------------------------
+
+Shards have varying track counts (preprocessor packs raw parquet files
+1:1). With B ranks, each rank gets shards[rank::B]; the per-rank totals
+differ. Without a cap:
+
+    rank 0: 100 batches → enters epoch barrier
+    rank 1:  95 batches → still in training_step …
+    rank 0 calls all_reduce on grads, blocks forever on rank 1.
+
+Mitigation (both layers required):
+    (a) Inside __iter__: each worker yields at most
+        worker_max = min_rank_total * worker_share / this_rank_total
+        tracks. All workers across all ranks compute the same
+        min_rank_total deterministically (same shard shuffle + same
+        track-count dict).
+    (b) Inside train_dataloader: trainer.limit_train_batches is set to
+        min_rank_total // batch_size, so even if drop_last rounding
+        introduces a +/-1 batch wobble, Lightning forcibly stops every
+        rank at the same step count.
+
+These two together make epoch boundaries deterministic across ranks
+without any cross-rank communication.
+
+
+--------------------------------------------------------------------------------
+8. Quick-reference: which config knobs trigger which path
+--------------------------------------------------------------------------------
+
+    data.streaming: true
+        → ColliderMLStreamingDataset (sliding shard window, DDP-aware).
+        → Honour data.shard_buffer_size.
+        → tail_upsample_* knobs are IGNORED on this path.
+
+    data.streaming: false (default)
+        → ColliderMLTrackDataset (eager full index, mmap throughout).
+        → If tail_upsample_threshold_mm > 0 AND tail_upsample_weight != 1
+          → _StratifiedTailSampler replaces shuffle=True.
+
+    data.packed_batches: true
+        → collate_tracks_packed emits (1, total_L, …) packed tensors.
+        → Supported by SSM-CLS (BidirectionalMambaCLSEncoder) and the
+          transformer (EncoderWithCLS, attn_type='flash-varlen').
+          Not supported by SSM-state (BidirectionalMambaEncoder).
+
+    data.packed_batches: false (default)
+        → collate_tracks emits (B, max_L, …) padded tensors.
+        → Works with every encoder (transformer, ssm_state, ssm_cls).
+
+    data.load_acts: true
+        → Adds acts_reco + acts_dm_mask + track_meta to val/test batches.
+        → Required to compute SSM-vs-CKF DM-subset metrics.
+
+    data.num_train_shards: -1 (default)
+        → Use every shard listed in split["train"].
+        → Set to a small int for fast smoke tests.
+
+    trainer.reload_dataloaders_every_n_epochs: 1
+        → REQUIRED when data.streaming=true so set_epoch fires per epoch.
+        → Harmless (no-op cost-wise) when streaming=false.

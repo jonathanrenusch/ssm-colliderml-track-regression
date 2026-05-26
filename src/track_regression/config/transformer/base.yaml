@@ -44,7 +44,7 @@ trainer:
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-base
+      name: TRK-TXF-base
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
 
@@ -89,7 +89,12 @@ model:
       #   SSM         (BidirectionalMambaEncoder)       → ssm_state
       #   SSM-CLS     (BidirectionalMambaCLSEncoder)    → ssm_cls
       #   Transformer (EncoderWithCLS)                  → register_token
-      encoder_autocast_dtype: bfloat16
+      # fp32 encoder: precision-matched against the SSM variants for the
+      # architecture A/B reported in the paper. Transformer leaves must
+      # set ``attn_type: torch`` (PyTorch SDPA) because flash-attn-2 does
+      # not support fp32; flash-varlen + bf16 is opt-in for users
+      # trading comparability for speed.
+      encoder_autocast_dtype: float32
       # Per-direction state projection heads (only consumed when pool == ssm_state)
       state_head_output_dim: 128
       state_head_hidden_layers: [192]
@@ -103,7 +108,6 @@ model:
       input_net_hidden_layers: [128]
       input_net_dropout: 0.0
       input_net_activation: SiLU
-      sort_field: s
       fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
       fourier_base: 2
       # Min-max normalisation bounds (per-hit feature).  Unchanged from the
@@ -160,6 +164,11 @@ data:
   preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_loose_pretrain
   batch_size: 2048
   num_workers: 8
+  # Doubles PyTorch DataLoader's default queue depth (default 2 → 4) so each
+  # worker buffers 4 batches ahead of the GPU. Targets the dataloader-floor
+  # observed on full H100 where the encoder finishes faster than the loader
+  # can deliver. ~80 MB extra host RAM at BS=2048; negligible.
+  prefetch_factor: 4
   pin_memory: true
   num_train_shards: -1
   # Load ACTS Kalman Filter predictions + the double-matched mask for the
@@ -169,3 +178,12 @@ data:
   # training — it only affects val I/O.  Both p0_loose_pretrain and
   # p200_loose_finetune ship acts_reco.npy + acts_dm_mask.npy.
   load_acts: true
+
+  # Padded by default for the transformer leaves. Packed mode requires
+  # flash-varlen for efficient block-diagonal attention; with
+  # ``attn_type: torch`` (PyTorch SDPA, fp32-compatible) the packed path
+  # materialises a ``(total_L)^2`` attention matrix and runs ~100x slower
+  # than the equivalent padded ``(B * max_L^2)`` path. Override to true
+  # ONLY IF you also set ``attn_type: flash-varlen`` (which forces bf16
+  # internally and breaks the fp32 fairness comparison vs SSM-CLS).
+  packed_batches: false

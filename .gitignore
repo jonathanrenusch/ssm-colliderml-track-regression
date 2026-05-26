@@ -22,6 +22,7 @@ scratch/
 out/
 .DS_Store
 *.out
+*.log
 
 # Editor
 .vscode/

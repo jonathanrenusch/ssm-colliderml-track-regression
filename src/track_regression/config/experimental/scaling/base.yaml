@@ -1,16 +1,25 @@
 # =============================================================================
-# Scaling sweep base — SSM-CLS + FP32 encoder, aligned to the actual objective.
+# Scaling-study base — depth-only sweep at narrow width.
 # =============================================================================
-# Auto-loaded by train.py for every config in this folder (see train.py:47).
-# Defaults here already reflect the study objective:
-#   - pool: ssm_cls                        (CLS-token pool at each scan terminus)
-#   - encoder_autocast_dtype: float32      (no bf16 in the selective scan)
-#   - dim: 192, input_net_hidden_layers: [192], output_head_hidden_layers: [256]
-#   - output_head_init_scale: 0.01         (stability fix from v2 core configs)
-#   - Encoder placeholder: BidirectionalMambaCLSEncoder at the base arch
-#     (10 L / dim=192 / d_state=32).
-# Study configs override only what they change — num_layers, d_state, dim for
-# the wider runs, and the per-run loss_module (4- vs 5-param).
+# Auto-loaded by train.py for every leaf in this folder. The depth
+# ladder is {2, 4, 6, 8, 10} layers; every leaf inherits the shared
+# backbone and only overrides ``num_layers``. Within the sweep the
+# trend is clean (one knob varies) — that trend is the deliverable.
+#
+# This sweep runs at a **deliberately narrower configuration** than the
+# production ``ssm_cls/base.yaml`` so the depth ladder is reasonably
+# cheap to walk end-to-end. The differences vs the production
+# (headline-pretrain) model are:
+#   - ``dim`` 128 here vs 192 in production
+#   - ``d_state`` 16 here vs 32 in production
+#   - ``output_head_hidden_layers`` [128] here vs [256] in production
+#   - ``input_net_hidden_layers`` [128] here vs [192] in production
+# As a result the 10-layer endpoint of this sweep is **not** a drop-in
+# proxy for the production headline run — read the trend, not the
+# absolute number. Shared with production (and therefore valid axes for
+# extrapolation): pool=ssm_cls, fp32 encoder, headdim=32, chunk_size=16,
+# Lion + OneCycle schedule, p0_core_pretrain dataset, loss family.
+# Each leaf sets its own ``num_layers`` and a unique trainer.logger.name.
 # =============================================================================
 
 seed_everything: 42
@@ -37,7 +46,7 @@ trainer:
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-base
+      name: TRK-SSMCLS-scaling-base
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
 
@@ -77,16 +86,16 @@ model:
     class_path: track_regression.model.TrackParameterRegressor
     init_args:
       input_dim: 12
-      dim: 192
+      dim: 128
       pool: ssm_cls
       encoder_autocast_dtype: float32
       # Final output head (combines the (B, 2·dim) CLS concat → targets).
-      output_head_hidden_layers: [256]
+      output_head_hidden_layers: [128]
       output_head_dropout: 0.0
       output_head_activation: SiLU
       output_head_init_scale: 0.01
       # Input embedding network
-      input_net_hidden_layers: [192]
+      input_net_hidden_layers: [128]
       input_net_dropout: 0.0
       input_net_activation: SiLU
       fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
@@ -109,14 +118,15 @@ model:
         - detector
         - eta_hit
 
-      # Encoder placeholder at the base arch (10 L / dim=192 / d_state=32).
-      # Scaling study configs override num_layers / d_state / dim.
+      # Encoder placeholder. Each scaling leaf overrides ``num_layers``;
+      # ``d_state: 16`` is the scaling-study default (vs the ssm_cls/base
+      # default of 32) — see the comment at the top of this file.
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
         init_args:
           num_layers: 10
-          dim: 192
-          d_state: 32
+          dim: 128
+          d_state: 16
           d_conv: 4
           expand: 2
           headdim: 32
@@ -146,6 +156,10 @@ data:
   preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
   batch_size: 2048
   num_workers: 8
+  # Doubles PyTorch DataLoader's default queue depth (default 2 → 4) so each
+  # worker buffers 4 batches ahead of the GPU. Targets the dataloader-floor
+  # observed on full H100 where the encoder finishes faster than the loader
+  # can deliver. ~80 MB extra host RAM at BS=2048; negligible.
   prefetch_factor: 4
   pin_memory: true
   num_train_shards: -1

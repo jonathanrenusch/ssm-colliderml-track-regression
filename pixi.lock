@@ -4203,7 +4203,7 @@ packages:
 - pypi: .
   name: ssm-track-regression
   version: 0.1.0
-  sha256: 10b7a5de147b0524d5220ad95c2fa2133eeb04e2793b1915e90fbbf67b887b22
+  sha256: 8779481fe985e2fb80f99e9ce3eb0ca5e255a20f73f0097a52cbef0390d4123e
   requires_dist:
   - packaging>=24.1,<27
   - wheel>=0.45.1,<0.46

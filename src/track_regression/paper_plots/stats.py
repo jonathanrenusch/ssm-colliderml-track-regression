@@ -21,8 +21,15 @@ DISPLAY_SCALE = {"d0": 1e3, "z0": 1e3, "phi": 1e3, "theta": 1e3, "qop": 1.0}
 DISPLAY_UNIT = {"d0": "µm", "z0": "µm", "phi": "mrad", "theta": "mrad", "qop": "1/GeV"}
 
 
-def _raw_std(x: np.ndarray) -> float:
-    return float(np.std(x))
+def _raw_rms(x: np.ndarray) -> float:
+    """True RMSE = sqrt(mean(x**2)) of the un-clipped residuals.
+
+    Matches the ML-community RMSE convention. Equals the standard deviation
+    only when mean(x) == 0; otherwise picks up the bias term so a
+    systematically pulled estimator (e.g. d0 collapse) does not hide its bias
+    behind a small spread.
+    """
+    return float(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2)))
 
 
 def _iqr_robust_sigma(x: np.ndarray) -> float:
@@ -31,11 +38,13 @@ def _iqr_robust_sigma(x: np.ndarray) -> float:
 
 
 def _iter3sigma_rms(x: np.ndarray) -> float:
+    """Iterative 3σ-clipped RMSE: convergence cut uses σ, returned value is
+    sqrt(mean(x**2)) of the converged set (true RMSE, bias-sensitive)."""
     return iterative_rms_convergence(x)["rms"]
 
 
 METRICS = {
-    "raw_std": _raw_std,
+    "raw_rms": _raw_rms,
     "iqr_robust_sigma": _iqr_robust_sigma,
     "iter3sigma_rms": _iter3sigma_rms,
 }
@@ -75,7 +84,7 @@ def compute_stats(
 
 
 def _fmt(val: float, sig: float, scale: float, sci: bool = False) -> str:
-    """Format mean ± 2σ (95% CI under normal-bootstrap assumption)."""
+    """Format mean ± 2·SE_boot (normal-approximation 95% CI; not percentile)."""
     if not np.isfinite(val):
         return "    nan      "
     s = 2.0 * sig
@@ -92,14 +101,16 @@ def write_stats(stats: dict, bundle_dir: Path) -> None:
 
     lines: list[str] = []
     lines.append(f"Double-matched track count: {stats['count']:,}")
-    lines.append("All ± uncertainties below are bootstrap **2σ** (95% CI).")
+    lines.append("All ± uncertainties below are ±2 × bootstrap SE")
+    lines.append("(normal-approximation 95% CI; not the 2.5/97.5 percentile bootstrap).")
     lines.append("")
 
-    # Three blocks: pre-clip RMS (= raw std), IQR/1.349, iter-3σ RMS
+    # Three blocks: pre-clip RMSE (= sqrt(mean(x²)), tail- + bias-sensitive),
+    # IQR/1.349 (robust core σ), iter-3σ-clipped RMSE (post-clip core).
     blocks = [
-        ("raw_std",          "Raw standard deviation (pre-clip RMS, tail-inclusive)"),
+        ("raw_rms",          "Raw RMSE = sqrt(mean(x²)) — pre-clip, tail- + bias-sensitive"),
         ("iqr_robust_sigma", "IQR / 1.349 (robust core σ, no clipping)"),
-        ("iter3sigma_rms",   "Iterative 3σ-clipped RMS (post-clip core)"),
+        ("iter3sigma_rms",   "Iterative 3σ-clipped RMSE (post-clip core, bias-sensitive)"),
     ]
     for metric, header in blocks:
         lines.append("=" * 92)
@@ -125,7 +136,7 @@ def write_stats(stats: dict, bundle_dir: Path) -> None:
     lines.append("=" * 92)
     lines.append(f"  {'param':<7} {'pre-clip ratio (raw)':>26} {'IQR ratio':>20} {'post-clip ratio (iter-3σ)':>30}")
     for p in PARAMS:
-        a = stats[p]["raw_std"]["ratio"]
+        a = stats[p]["raw_rms"]["ratio"]
         b = stats[p]["iqr_robust_sigma"]["ratio"]
         c = stats[p]["iter3sigma_rms"]["ratio"]
         lines.append(

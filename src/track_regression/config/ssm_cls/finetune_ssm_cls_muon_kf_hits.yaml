@@ -23,7 +23,7 @@ trainer:
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-Q7-unbottleneck-residinit-C-MuonHybrid-WSD-FP32-finetune-KFHITS
+      name: TRK-SSMCLS-finetune-muon-wsd-kfhits
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -83,8 +83,9 @@ model:
 
   model:
     init_args:
-      state_head_output_dim: 128
-      state_head_hidden_layers: [192]
+      # Unbottlenecked pool_head — matches pretrain_ssm_cls_packed/padded.
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
       state_head_dropout: 0.0
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
@@ -134,9 +135,9 @@ model:
               quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
 
 data:
-  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p200_core_kf_hits_finetune
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_kf_hits_pretrain
   load_acts: true
-  batch_size: 20000
+  batch_size: 22000
   num_workers: 1
   pin_memory: true
   streaming: true

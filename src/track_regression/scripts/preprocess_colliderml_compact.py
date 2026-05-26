@@ -2,13 +2,9 @@
 # ruff: noqa: TID252, PLR0915, C901
 """Compact preprocessing of ColliderML Release-1 parquet shards for track regression.
 
-This is a *compact* variant of ``preprocess_colliderml.py``.  It stores **only**
-the hits belonging to selected tracks (not the full event), which typically
-reduces per-shard size from ~1.3 GB to ~5–40 MB — a 30–250× reduction.
-
-The output format is fully compatible with ``ColliderMLTrackDataset`` in
-``data.py``; the CSR indices simply point into the compact hits array instead
-of a full-event hits array.
+Stores only the hits belonging to selected tracks (not the full event) in a
+CSR layout. The output is consumed by ``ColliderMLTrackDataset`` /
+``ColliderMLStreamingDataset`` in ``data.py``.
 
 Output structure (per shard)::
 

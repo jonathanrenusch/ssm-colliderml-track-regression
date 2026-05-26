@@ -1,11 +1,11 @@
 # =============================================================================
-# pretrain_ssm_cls_8L — depth-scaling sweep, 8-layer leaf.
+# pretrain_ssm_cls_6L — depth-scaling sweep, 6-layer leaf.
 # =============================================================================
 # Inherits scaling/base.yaml (auto-loaded by train.py from the same folder).
 # Base pins everything — pool=ssm_cls, fp32 encoder, dim=192, d_state=16,
 # Lion + OneCycle schedule, p0_core_pretrain dataset, etc. This leaf
 # only overrides:
-#   1. encoder.num_layers = 8            (depth point on the sweep ladder)
+#   1. encoder.num_layers = 6            (depth point on the sweep ladder)
 #   2. trainer.logger.name                  (unique Comet experiment id)
 #   3. loss_module (5-param Q7)             (base intentionally leaves it unset)
 #   4. model.lrs_config                     (matches pretrain_ssm_cls.yaml)
@@ -17,7 +17,7 @@ trainer:
   devices: [1]
   logger:
     init_args:
-      name: TRK-SSMCLS-depth-scaling-8L-d_state16
+      name: TRK-SSMCLS-scaling-pretrain-6L-dstate16
 
 model:
   model:
@@ -28,7 +28,7 @@ model:
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
         init_args:
-          num_layers: 8
+          num_layers: 6
           dim: 128
           d_state: 16
           d_conv: 4

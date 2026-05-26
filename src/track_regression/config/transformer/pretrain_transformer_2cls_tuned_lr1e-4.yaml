@@ -1,30 +1,44 @@
 # =============================================================================
-# Transformer (flash-attn2 + register token) + Q7 — FP32 pretrain on p0_core
+# Transformer (SDPA + 2 register tokens) + Q7 — FP32 pretrain on p0_core
+# Sibling of pretrain_transformer_2cls.yaml — fully literature-anchored
+# "best defensible TXF baseline" combining the LR axis and the CaiT-prescribed
+# layer_scale. VRL deliberately left OFF (it's still niche, see _vrl.yaml).
 # =============================================================================
-# Key changes vs the original (broken) config:
-#   - pool_head projection (Dense bottleneck) added in model.py — matches
-#     the ssm_state path's fwd_head/bwd_head pattern, provides gradient
-#     bottleneck before the bf16 encoder backward.
-#   - output_head_init_scale: 0.01 — keeps initial predictions near zero.
-#   - Kept transformer-specific stabilisation (qkv_norm, layer_scale)
-#     as these address attention-specific issues, not the
-#     missing-projection-head problem.
-#   - drop_path removed (was 0.05) — matched off in the SSM configs;
-#     keeping it on only on the transformer side would muddy the
-#     architecture A/B.
+# Purpose: the strongest defensible transformer baseline backed by primary
+# sources. Use this when reviewers ask "what does the transformer look like
+# when you tune it the way the original architecture papers say to?".
+#
+# Two deltas vs pretrain_transformer_2cls.yaml:
+#
+#   1. lrs_config.max: 5.0e-5 → 1.0e-4
+#      DeiT-Tiny (dim=192, 12L, 5.7M params) uses AdamW=1e-3; Lion's
+#      published 3-10× lower-LR rule (Chen et al. 2023, Table 12) gives
+#      Lion ≈ 1e-4 to 3e-4. 1e-4 is the conservative end and matches the
+#      Lion paper's only published transformer recipe (ViT-B/16, BS=4096).
+#      3e-4 is aggressive extrapolation and not used here.
+#
+#   2. encoder.layer_scale: 1.0e-5 → 1.0e-1
+#      CaiT's depth-12 prescription (Touvron et al. 2021, Section 2).
+#      The inherited 1e-5 is the depth-24 value, applied off-schedule.
+#
+# Deliberately NOT changed (vs pretrain_transformer_2cls_modern_lr1e-4):
+#   - value_residual stays false. VRL (Zhou et al. 2024, arXiv 2410.17897)
+#     is unproven for sequence regression and not standard in modern
+#     transformer reference implementations (lucidrains/x-transformers
+#     defaults False; not in HF). Tested separately in _vrl.yaml.
+#
+# This is the cell of the ablation grid you cite in the paper as
+# "transformer with all the architectural priors set to literature
+# defaults"; if SSM-CLS still wins under this baseline, the ~10% gap is
+# not a recipe artefact.
 # =============================================================================
-
-# Pre-trained checkpoint shipped at checkpoints/pretrain_transformer_1cls/best.ckpt.
-# Pass it to `train.py test --ckpt_path ...` for evaluation; leave null here so
-# `train.py fit` trains from scratch.
-ckpt_path: null
 trainer:
-  devices: [0]
+  devices: [1]
   max_epochs: 50
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-TXF-Q7-FP32-Core-pretrain
+      name: TRK-TXF-pretrain-2cls-packed-lr1e-4-tuned
       project_name: ssm-track-regression
       offline_directory: logs/comet_offline
   callbacks:
@@ -68,26 +82,20 @@ model:
         class_path: track_regression.transformer_encoder.EncoderWithCLS
         init_args:
           dim: 192
+          num_cls_tokens: 2
           num_layers: 12
-          attn_type: flash-varlen
+          attn_type: torch
           norm: RMSNorm
           value_residual: false
           qkv_norm: true
-          layer_scale: 1.0e-5
+          layer_scale: 1.0e-1
           attn_kwargs:
             num_heads: 6
           dense_kwargs:
             hidden_dim_scale: 4
-          # Content-derived Fourier-of-time positional encoding. The
-          # transformer is otherwise permutation-invariant in the hits
-          # (input-feature Fourier conveys per-hit geometry only, not
-          # arc length). Truth time is the on-helix arc-length proxy
-          # used for shard-level sorting in preprocessing; here it is
-          # also fed in as a posenc. Pass ``posenc_fourier_scales: []``
-          # to disable.
           posenc_fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
           posenc_fourier_base: 2
-          posenc_time_scale: 1.0     # truth time is in ns; tune to ~p99 if needed
+          posenc_time_scale: 1.0
       loss_module:
         class_path: track_regression.losses.TrackParameterLoss
         init_args:
@@ -125,7 +133,7 @@ model:
   optimizer: Lion
   lrs_config:
     initial: 1.0e-05
-    max: 5.0e-05
+    max: 1.0e-04
     end: 1.0e-06
     pct_start: 0.10
     weight_decay: 1.0e-03
