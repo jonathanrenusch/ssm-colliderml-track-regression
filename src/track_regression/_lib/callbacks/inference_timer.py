@@ -26,7 +26,14 @@ class InferenceTimer(Callback):
         self.old_forward = model.forward
 
         def new_forward(*args, **kwargs):
-            self._tmp_dims = sum(v.shape[1] for v in args[0].values())
+            # Sum the sequence dimension across the 2-D+ input tensors. Guard
+            # against 1-D entries (e.g. packed-mode ``cu_seqlens``) and
+            # non-tensor values, which have no shape[1].
+            self._tmp_dims = sum(
+                v.shape[1]
+                for v in args[0].values()
+                if isinstance(v, torch.Tensor) and v.ndim >= 2
+            )
             with cuda_timer(self.times):
                 return self.old_forward(*args, **kwargs)
 
