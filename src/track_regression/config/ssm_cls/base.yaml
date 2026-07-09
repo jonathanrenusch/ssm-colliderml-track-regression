@@ -24,7 +24,7 @@ trainer:
   # Strict FP32 at the Lightning level. Encoder precision is controlled
   # separately via model.model.init_args.encoder_autocast_dtype (float32 here).
   precision: 32-true
-  log_every_n_steps: 50
+  log_every_n_steps: 500
   default_root_dir: logs
   gradient_clip_val: 1.0
   enable_progress_bar: true
@@ -43,13 +43,21 @@ trainer:
 
   callbacks:
     - class_path: track_regression._lib.callbacks.InferenceTimer
+    # Kernel-campaign default (2026-07-09): v3c (compiled pure-torch
+    # quadratic dual, exact autograd) while training; v5pc (fused packed
+    # Triton kernels) for validation/test/predict. See CLAUDE.md +
+    # docs/perf/OPTIMIZATION_LOG.md. Remove this entry to run the stock
+    # mamba_ssm kernels (v0).
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto
     - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:
-        log_every_n_steps: 50
+        log_every_n_steps: 500
         log_parameter_stats: false
     - class_path: track_regression.callbacks.MinimalGpuMonitor
       init_args:
-        log_every_n_steps: 50
+        log_every_n_steps: 500
     - class_path: track_regression._lib.callbacks.SaveConfig
     - class_path: track_regression._lib.callbacks.Checkpoint
       init_args:
@@ -60,7 +68,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
       init_args:
-        refresh_rate: 50
+        refresh_rate: 500
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val/total
@@ -73,6 +81,7 @@ trainer:
 # ---- Model ------------------------------------------------------------------
 
 model:
+  train_metrics_every_n_steps: 500
   model:
     class_path: track_regression.model.TrackParameterRegressor
     init_args:

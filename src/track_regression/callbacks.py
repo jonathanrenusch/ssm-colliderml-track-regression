@@ -8,6 +8,7 @@ import subprocess
 import h5py
 import numpy as np
 from lightning import Callback, LightningModule, Trainer
+from lightning.pytorch.utilities import rank_zero_info
 import torch
 from torch import Tensor
 
@@ -255,3 +256,35 @@ class MinimalGpuMonitor(Callback):
             sync_dist=self._sync_dist,
         )
 
+
+
+class KernelSwapCallback(Callback):
+    """Swap the encoder onto a short-sequence kernel variant before training.
+
+    Campaign hook (docs/perf/OPTIMIZATION_LOG.md): applies
+    ``track_regression.mamba_short.apply_variant(pl_module.model, variant)``
+    in ``setup`` — i.e. after the checkpoint warm-start machinery built the
+    module but before ``configure_optimizers`` collects parameters, so
+    optimizer param groups reference the swapped modules. The math is an
+    algebraically identical re-expression of the Mamba2 update (oracle chain
+    in tests/test_mamba2short.py); training dynamics are unchanged up to
+    floating-point noise.
+
+    Parameters
+    ----------
+    variant : str
+        One of the campaign variants, e.g. ``v3`` (eager quadratic dual) or
+        ``v3c`` (+torch.compile of the static core).
+    """
+
+    def __init__(self, variant: str = "v3c") -> None:
+        self.variant = variant
+
+    def setup(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
+        from track_regression.mamba_short import apply_variant
+
+        apply_variant(pl_module.model, self.variant)
+        rank_zero_info(
+            f"[KernelSwapCallback] applied variant {self.variant!r} to "
+            f"{type(pl_module.model.encoder).__name__}"
+        )

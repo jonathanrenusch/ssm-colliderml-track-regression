@@ -106,6 +106,59 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
     └── 03_paper_plots.sh
 ```
 
+
+## Fast short-sequence kernels (GPU-optimization campaign)
+
+The stock `mamba_ssm` chunked scan is built for sequences of thousands of
+tokens; our tracks have at most 22 (20 hits + 2 CLS). The campaign on branch
+`opt_kernel` replaces its evaluation with the algebraically identical
+single-chunk SSD quadratic dual — one dense 22x22 lower-triangular product
+per track, embarrassingly parallel, no chunk machinery and no batch ceiling.
+Full record: `docs/perf/OPTIMIZATION_LOG.md`; campaign context: `CLAUDE.md`.
+
+**Defaults (no action needed):** every SSM-CLS config now ships a
+`KernelSwapCallback(variant="auto")` in its base callbacks —
+- while **training**, the encoder runs the compiled pure-PyTorch quadratic
+  dual (`v3c`): exact autograd, ~1.6-2.5x faster training steps;
+- in **validation / test / predict**, it runs the fused Triton packed
+  kernels (`v5pc`): ~5x inference throughput (0.18 -> 0.91 M tracks/s on
+  H100, t2k 11.1 -> 2.2 ms) and a batch ceiling of 600K+ tracks per call.
+Remove the callback entry from the config to run the stock kernels (`v0`).
+
+Every variant is checkpoint-compatible (identical parameter names) and
+passes a correctness-oracle chain (`tests/test_mamba2short.py`: fp64
+algebra, stock-kernel parity, end-to-end golden vs the trained checkpoint,
+<=1% physics-drift gate on 131k tracks, gradient parity). Notable: by fp64
+referee the new path is ~50x closer to the exact math than the stock
+kernel, whose internal TF32 matmuls it replaces with strict IEEE fp32.
+
+**Precision (important):** training scripts historically set
+`torch.set_float32_matmul_precision("high")` = TF32 GEMMs (10 mantissa
+bits). `train.py` now honours `TRK_MATMUL_PRECISION`; **new trainings must
+run with `TRK_MATMUL_PRECISION=highest`** (full IEEE fp32 everywhere —
+fp64-referee showed TF32 gradients carry ~50% relative error on this
+model). The default stays "high" only for numerics-compatibility when
+fine-tuning historical checkpoints.
+
+Ad-hoc benchmarking / variant selection:
+
+```bash
+# throughput of any variant (v0|v2p|v3|v3c|v4|v5|v5p|v5pc|auto)
+pixi run -e default python scripts/perf/bench_variant.py \
+    --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml \
+    --ckpt <ckpt.ckpt> --variant v5pc --mode staged --batch-size 32768
+
+# physics-drift gate (<=1% clipped-RMS per parameter, 131k-track subset)
+pixi run -e default python scripts/perf/physics_drift.py --variant v5pc ...
+
+# in code:
+from track_regression.mamba_short import apply_variant
+apply_variant(model, "v5pc")   # or "auto", "v3c", ...
+```
+
+The kernels are plain portable Triton (no Hopper-only features) and
+re-autotune on RTX-class GPUs (deployment target: RTX 5000 Ada / 3090).
+
 ## Quickstart
 
 ```bash

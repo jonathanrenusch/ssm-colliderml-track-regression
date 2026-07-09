@@ -1,0 +1,589 @@
+# Night 1 queue — V0 baselines, packed-60k diagnosis, physics subset + reference.
+#
+# Run:
+#   pixi run -e default python scripts/perf/runner.py \
+#       --queue scripts/perf/queues/night1.yaml \
+#       --results-dir docs/perf/results/night1
+#
+# The runner re-reads this file every scheduling pass: appending jobs mid-night
+# is safe. Job fields: id, kind (bench|sweep|profile_nsys|profile_ncu|physics|
+# custom), variant, gpu (any|0|1|exclusive), heavy_cpu, depends_on, timeout_s,
+# env (default|mamba232), args (dict -> CLI flags) or cmd (custom shell).
+
+night: 1
+
+defaults:
+  timeout_s: 7200
+
+# Shared paths (YAML anchors).
+_config: &config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+_ckpt: &ckpt logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt
+
+jobs:
+  # ---- V0 baselines (stock packed) -----------------------------------------
+  - id: v0_staged
+    kind: bench
+    variant: v0
+    gpu: any
+    timeout_s: 3600
+    args:
+      config: *config
+      ckpt: *ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 200
+      warmup: 20
+      num-workers: 0
+      tag: night1
+
+  - id: v0_e2e
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 3600
+    args:
+      config: *config
+      ckpt: *ckpt
+      mode: e2e
+      batch-size: 22000
+      timed-iters: 200
+      warmup: 20
+      num-workers: 4
+      max-batches: 220
+      tag: night1
+
+  - id: v0_sweep
+    kind: sweep
+    variant: v0
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 7200
+    args:
+      config: *config
+      ckpt: *ckpt
+      batch-size: 1024
+      timed-iters: 50
+      warmup: 10
+      num-workers: 0
+      tag: night1
+
+  # One context point: stock kernel at chunk_size=32 (config override only —
+  # the checkpoint weights are chunk-size independent).
+  - id: v0_chunk32_staged
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 3600
+    args:
+      config: *config
+      ckpt: *ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 200
+      warmup: 20
+      num-workers: 0
+      tag: night1_chunk32
+      set:
+        - model.model.init_args.encoder.init_args.chunk_size=32
+
+  # ---- Packed ~60k-token ceiling diagnosis ----------------------------------
+  - id: diagnose_packed60k
+    kind: custom
+    gpu: any
+    depends_on: [v0_sweep]
+    timeout_s: 10800
+    cmd: >-
+      pixi run -e default python scripts/perf/diagnose_packed_60k.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --report docs/perf/results/night1/packed60k_diagnosis.md
+      --sanitize
+
+  # ---- Physics subset + V0 reference ----------------------------------------
+  - id: physics_subset_build
+    kind: custom
+    gpu: any
+    heavy_cpu: true
+    timeout_s: 7200
+    cmd: >-
+      pixi run -e default python scripts/perf/physics_drift.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v0
+      --out docs/perf/results/night1/physics/_subset_probe.npz
+      --build-subset-only
+
+  - id: v0_physics_ref
+    kind: physics
+    variant: v0
+    gpu: any
+    depends_on: [physics_subset_build]
+    timeout_s: 7200
+    args:
+      config: *config
+      ckpt: *ckpt
+      out: docs/perf/results/night1/physics/v0.npz
+      job-id: v0_physics_ref
+
+  # ---- V2' / V3 / V3c (mamba_short landed, oracles O1-O8+O10 green) ---------
+  - id: v2p_staged
+    kind: bench
+    variant: v2p
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 3600
+    args: {config: *config, ckpt: *ckpt, mode: staged, batch-size: 22000,
+           timed-iters: 200, warmup: 20, num-workers: 0, tag: night1}
+  - id: v2p_physics
+    kind: physics
+    variant: v2p
+    gpu: any
+    depends_on: [v2p_staged, v0_physics_ref]
+    timeout_s: 7200
+    args: {config: *config, ckpt: *ckpt, ref: docs/perf/results/night1/physics/v0.npz,
+           out: docs/perf/results/night1/physics/v2p.npz, job-id: v2p_physics}
+  - id: v3_staged
+    kind: bench
+    variant: v3
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 3600
+    args: {config: *config, ckpt: *ckpt, mode: staged, batch-size: 22000,
+           timed-iters: 200, warmup: 20, num-workers: 0, tag: night1}
+  - id: v3_sweep
+    kind: sweep
+    variant: v3
+    gpu: any
+    depends_on: [v3_staged]
+    timeout_s: 10800
+    args: {config: *config, ckpt: *ckpt, batch-size: 8192, timed-iters: 30,
+           warmup: 10, num-workers: 0, tag: night1}
+  - id: v3_physics
+    kind: physics
+    variant: v3
+    gpu: any
+    depends_on: [v3_staged, v0_physics_ref]
+    timeout_s: 7200
+    args: {config: *config, ckpt: *ckpt, ref: docs/perf/results/night1/physics/v0.npz,
+           out: docs/perf/results/night1/physics/v3.npz, job-id: v3_physics}
+  - id: v3c_staged
+    kind: bench
+    variant: v3c
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 5400
+    args: {config: *config, ckpt: *ckpt, mode: staged, batch-size: 22000,
+           timed-iters: 200, warmup: 40, num-workers: 0, tag: night1}
+  - id: v3c_sweep
+    kind: sweep
+    variant: v3c
+    gpu: any
+    depends_on: [v3c_staged]
+    timeout_s: 10800
+    args: {config: *config, ckpt: *ckpt, batch-size: 8192, timed-iters: 30,
+           warmup: 40, num-workers: 0, tag: night1}
+  - id: v3c_physics
+    kind: physics
+    variant: v3c
+    gpu: any
+    depends_on: [v3c_staged, v0_physics_ref]
+    timeout_s: 7200
+    args: {config: *config, ckpt: *ckpt, ref: docs/perf/results/night1/physics/v0.npz,
+           out: docs/perf/results/night1/physics/v3c.npz, job-id: v3c_physics}
+
+  # ---- Nightly 10L depth-scaling report (curiosity metric, not the target) --
+  # Saved Lightning configs from the original runs; data dir + packed overridden
+  # (76304d = padded pretrain run; e149d = depth-scaling run).
+  - id: v10L192_v0_staged
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/ckpts/epoch=048-val_total=0.00110.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 20
+      num-workers: 0
+      tag: night1_10L192
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L192_v3c_staged
+    kind: bench
+    variant: v3c
+    gpu: any
+    depends_on: [v10L192_v0_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/ckpts/epoch=048-val_total=0.00110.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 40
+      num-workers: 0
+      tag: night1_10L192
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L128_v0_staged
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v0_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/ckpts/epoch=047-val_total=0.00117.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 20
+      num-workers: 0
+      tag: night1_10L128
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L128_v3c_staged
+    kind: bench
+    variant: v3c
+    gpu: any
+    depends_on: [v10L128_v0_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/ckpts/epoch=047-val_total=0.00117.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 40
+      num-workers: 0
+      tag: night1_10L128
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+
+  # ---- mamba_ssm 2.3.2 baseline check (separate env; NIGHT-1 deliverable) ---
+  - id: v0_232_staged
+    kind: bench
+    variant: v0
+    gpu: any
+    env: mamba232
+    depends_on: [v0_staged]
+    timeout_s: 3600
+    args: {config: *config, ckpt: *ckpt, mode: staged, batch-size: 22000,
+           timed-iters: 200, warmup: 20, num-workers: 0, tag: night1_mamba232}
+  - id: v0_232_sweep
+    kind: sweep
+    variant: v0
+    gpu: any
+    env: mamba232
+    depends_on: [v0_232_staged]
+    timeout_s: 7200
+    args: {config: *config, ckpt: *ckpt, batch-size: 8192, timed-iters: 30,
+           warmup: 10, num-workers: 0, tag: night1_mamba232}
+
+  # ---- Profile jobs (exclusive — scheduled after the bench wave) ------------
+  - id: profile_nsys_v0
+    kind: profile_nsys
+    gpu: exclusive
+    depends_on: [v0_sweep, v3c_sweep]
+    timeout_s: 3600
+    cmd: >-
+      /usr/local/cuda-13.1/bin/nsys profile --trace=cuda,nvtx --sample=none
+      --force-overwrite=true -o docs/perf/profiles/night1/v0_staged
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v0 --mode staged --batch-size 22000 --timed-iters 20 --warmup 10
+      --job-id profile_nsys_v0 --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: profile_nsys_v3c
+    kind: profile_nsys
+    gpu: exclusive
+    depends_on: [profile_nsys_v0]
+    timeout_s: 3600
+    cmd: >-
+      /usr/local/cuda-13.1/bin/nsys profile --trace=cuda,nvtx --sample=none
+      --force-overwrite=true -o docs/perf/profiles/night1/v3c_staged
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v3c --mode staged --batch-size 22000 --timed-iters 20 --warmup 40
+      --job-id profile_nsys_v3c --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: profile_ncu_v3c
+    kind: profile_ncu
+    gpu: exclusive
+    depends_on: [profile_nsys_v3c]
+    timeout_s: 5400
+    cmd: >-
+      /usr/local/cuda-13.1/bin/ncu --target-processes all
+      --nvtx --nvtx-include "timed/" --launch-count 40 --replay-mode kernel
+      --section SpeedOfLight --section Occupancy --section LaunchStats
+      --section MemoryWorkloadAnalysis -f -o docs/perf/profiles/night1/v3c_staged
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v3c --mode staged --batch-size 22000 --timed-iters 3 --warmup 40
+      --job-id profile_ncu_v3c --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: parse_profiles
+    kind: custom
+    gpu: any
+    depends_on: [profile_ncu_v3c]
+    timeout_s: 3600
+    cmd: >-
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v0_staged.nsys-rep --label v0
+      --outdir docs/perf/plots/night1 &&
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v3c_staged.nsys-rep
+      --ncu-rep docs/perf/profiles/night1/v3c_staged.ncu-rep --label v3c
+      --outdir docs/perf/plots/night1
+
+  # ---- V4 fused Triton kernel (appended mid-night; O9 green at 7e-7) --------
+  - id: v4_staged
+    kind: bench
+    variant: v4
+    gpu: any
+    depends_on: [v3c_staged]
+    timeout_s: 5400
+    args: {config: *config, ckpt: *ckpt, mode: staged, batch-size: 22000,
+           timed-iters: 200, warmup: 40, num-workers: 0, tag: night1}
+  - id: v4_sweep
+    kind: sweep
+    variant: v4
+    gpu: any
+    depends_on: [v4_staged]
+    timeout_s: 10800
+    args: {config: *config, ckpt: *ckpt, batch-size: 8192, timed-iters: 30,
+           warmup: 40, num-workers: 0, tag: night1}
+  - id: v4_physics
+    kind: physics
+    variant: v4
+    gpu: any
+    depends_on: [v4_staged, v0_physics_ref]
+    timeout_s: 7200
+    args: {config: *config, ckpt: *ckpt, ref: docs/perf/results/night1/physics/v0.npz,
+           out: docs/perf/results/night1/physics/v4.npz, job-id: v4_physics}
+
+  # ---- V4 profiles (appended: scan kernel is the bottleneck, need ncu SOL) --
+  - id: profile_ncu_v4
+    kind: profile_ncu
+    gpu: exclusive
+    depends_on: [profile_ncu_v3c, v4_staged]
+    timeout_s: 5400
+    cmd: >-
+      /usr/local/cuda-13.1/bin/ncu --target-processes all
+      -k regex:ssd_short --launch-count 30 --replay-mode kernel
+      --section SpeedOfLight --section Occupancy --section LaunchStats
+      --section MemoryWorkloadAnalysis --section SchedulerStats
+      --section WarpStateStats -f -o docs/perf/profiles/night1/v4_kernel
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v4 --mode staged --batch-size 22000 --timed-iters 3 --warmup 40
+      --job-id profile_ncu_v4 --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: parse_profiles_v4
+    kind: custom
+    gpu: any
+    depends_on: [profile_ncu_v4]
+    timeout_s: 3600
+    cmd: >-
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --ncu-rep docs/perf/profiles/night1/v4_kernel.ncu-rep --label v4_kernel
+      --outdir docs/perf/plots/night1
+
+  # ---- 10L retry after stale-init_args fix ----
+  - id: v10L192_v0_r2
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v3c_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/ckpts/epoch=048-val_total=0.00110.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 20
+      num-workers: 0
+      tag: night1_10L192
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L192_v3c_r2
+    kind: bench
+    variant: v3c
+    gpu: any
+    depends_on: [v10L192_v0_r2]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/76304d6ec483428b806456c3a6b9bbf7/ckpts/epoch=048-val_total=0.00110.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 40
+      num-workers: 0
+      tag: night1_10L192
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L128_v0_r2
+    kind: bench
+    variant: v0
+    gpu: any
+    depends_on: [v3c_staged]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/ckpts/epoch=047-val_total=0.00117.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 20
+      num-workers: 0
+      tag: night1_10L128
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+  - id: v10L128_v3c_r2
+    kind: bench
+    variant: v3c
+    gpu: any
+    depends_on: [v10L128_v0_r2]
+    timeout_s: 5400
+    args:
+      config: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/config.yaml
+      ckpt: logs/src/track_regression/logs/comet_offline/e149d7efa6b847a689525e61ab7560cb/ckpts/epoch=047-val_total=0.00117.ckpt
+      mode: staged
+      batch-size: 22000
+      timed-iters: 100
+      warmup: 40
+      num-workers: 0
+      tag: night1_10L128
+      set:
+        - data.preprocessed_dir=/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune
+        - data.packed_batches=true
+
+
+  # ---- Profile requeue after runner stale-check fix (profilers exempt) ------
+  - id: profile_ncu_v3c_r2
+    kind: profile_ncu
+    gpu: exclusive
+    timeout_s: 5400
+    cmd: >-
+      /usr/local/cuda-13.1/bin/ncu --target-processes all
+      --nvtx --nvtx-include "timed/" --launch-count 40 --replay-mode kernel
+      --section SpeedOfLight --section Occupancy --section LaunchStats
+      --section MemoryWorkloadAnalysis -f -o docs/perf/profiles/night1/v3c_staged
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v3c --mode staged --batch-size 22000 --timed-iters 3 --warmup 40
+      --job-id profile_ncu_v3c_r2 --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: profile_ncu_v4_r2
+    kind: profile_ncu
+    gpu: exclusive
+    depends_on: [profile_ncu_v3c_r2, v4_staged]
+    timeout_s: 5400
+    cmd: >-
+      /usr/local/cuda-13.1/bin/ncu --target-processes all
+      -k regex:ssd_short --launch-count 30 --replay-mode kernel
+      --section SpeedOfLight --section Occupancy --section LaunchStats
+      --section MemoryWorkloadAnalysis --section SchedulerStats
+      --section WarpStateStats -f -o docs/perf/profiles/night1/v4_kernel
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v4 --mode staged --batch-size 22000 --timed-iters 3 --warmup 40
+      --job-id profile_ncu_v4_r2 --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: parse_profiles_r2
+    kind: custom
+    gpu: any
+    depends_on: [profile_ncu_v4_r2]
+    timeout_s: 3600
+    cmd: >-
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v0_staged.nsys-rep --label v0
+      --outdir docs/perf/plots/night1 &&
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v3c_staged.nsys-rep
+      --ncu-rep docs/perf/profiles/night1/v3c_staged.ncu-rep --label v3c
+      --outdir docs/perf/plots/night1 &&
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --ncu-rep docs/perf/profiles/night1/v4_kernel.ncu-rep --label v4_kernel
+      --outdir docs/perf/plots/night1
+
+  # ---- Golden checks for the compiled/fused variants (artifact trail) -------
+  - id: golden_check_v3c
+    kind: custom
+    gpu: any
+    timeout_s: 1800
+    cmd: >-
+      pixi run -e default python scripts/capture_golden.py --check v3c
+      --out docs/perf/results/golden/golden_small_ieee.pt
+  - id: golden_check_v4
+    kind: custom
+    gpu: any
+    timeout_s: 1800
+    cmd: >-
+      pixi run -e default python scripts/capture_golden.py --check v4
+      --out docs/perf/results/golden/golden_small_ieee.pt
+
+  # ---- Ceiling bisection at the REAL boundary (sweep: ok@884K, fail@911K) ---
+  - id: diagnose_ceiling_r2
+    kind: custom
+    gpu: any
+    timeout_s: 7200
+    cmd: >-
+      pixi run -e default python scripts/perf/diagnose_packed_60k.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --min-tokens 860000 --max-tokens 940000 --step-tokens 10000
+      --report docs/perf/results/night1/packed_ceiling_diagnosis.md
+
+  # ---- Lean v4-kernel ncu (r3): small batch, kernel-only, few launches ------
+  - id: profile_ncu_v4_r3
+    kind: profile_ncu
+    gpu: exclusive
+    timeout_s: 3600
+    cmd: >-
+      /usr/local/cuda-13.1/bin/ncu --target-processes all
+      -k regex:ssd_short --launch-count 12 --replay-mode kernel
+      --section SpeedOfLight --section Occupancy
+      --section MemoryWorkloadAnalysis --section WarpStateStats
+      -f -o docs/perf/profiles/night1/v4_kernel
+      pixi run -e default python scripts/perf/bench_variant.py
+      --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml
+      --ckpt 'logs/src/track_regression/logs/comet_offline/1e0f5105c86d4bdd98a0cd3fa780f7dc/ckpts/epoch=049-val_total=0.00125.ckpt'
+      --variant v4 --mode staged --batch-size 8192 --timed-iters 2 --warmup 12
+      --job-id profile_ncu_v4_r3 --tag night1_profile
+      --out-jsonl docs/perf/results/night1/results.jsonl
+  - id: parse_profiles_r3
+    kind: custom
+    gpu: any
+    depends_on: [profile_ncu_v4_r3]
+    timeout_s: 3600
+    cmd: >-
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v0_staged.nsys-rep --label v0
+      --outdir docs/perf/plots/night1 &&
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --nsys-rep docs/perf/profiles/night1/v3c_staged.nsys-rep --label v3c
+      --outdir docs/perf/plots/night1 &&
+      pixi run -e default python scripts/perf/parse_profiles.py
+      --ncu-rep docs/perf/profiles/night1/v4_kernel.ncu-rep --label v4_kernel
+      --outdir docs/perf/plots/night1

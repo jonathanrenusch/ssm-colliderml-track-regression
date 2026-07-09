@@ -678,12 +678,20 @@ class TrackRegressionWrapper(LightningModule):
         pretrained_ckpt_path: str | None = None,
         pretrained_ckpt_strict: bool = True,
         gradient_clip_val: float = 1.0,
+        train_metrics_every_n_steps: int = 1,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
 
         self.name = name
         self.model = model
+        # Training-step diagnostics cadence (quantile crossing/calibration,
+        # physical-residual metrics, per-component loss logging). These are
+        # pure diagnostics — loss and gradients are identical regardless —
+        # but cost real per-step time (dozens of small eager kernels + log
+        # calls). 1 = historical behaviour (every step); the kernel-campaign
+        # pretrain configs set 50. Validation always computes everything.
+        self.train_metrics_every_n_steps = int(train_metrics_every_n_steps)
         self.lrs_config = lrs_config
         self.opt_name = optimizer
         if "betas" in lrs_config:
@@ -831,30 +839,45 @@ class TrackRegressionWrapper(LightningModule):
 
         valid_mask = targets.get("track_valid")
         losses = self.model.compute_loss(outputs, targets, valid_mask=valid_mask)
-        crossing_metrics = self.model.loss_module.quantile_crossing_metrics(outputs["pred"], valid_mask=valid_mask)
-        calibration_metrics = self.model.loss_module.quantile_calibration_metrics(outputs["pred"], targets, valid_mask=valid_mask)
 
         # Only use sync_dist for val/test — training metrics are local per-rank
         # averages.  Using sync_dist=True during training adds many NCCL
         # allreduces per step which can cause DDP synchronisation issues.
         do_sync = stage != "train"
 
-        # Log every component
-        for name, value in losses.items():
-            self.log(f"{stage}/{name}", value, sync_dist=do_sync, prog_bar=(name == "total"))
+        # Diagnostics cadence: in training these are computed every
+        # ``train_metrics_every_n_steps`` (identical information, far fewer
+        # tiny kernels + host round-trips per step); val/test always compute.
+        do_diag = stage != "train" or (
+            self.train_metrics_every_n_steps <= 1
+            or self.global_step % self.train_metrics_every_n_steps == 0
+        )
 
-        # Monitor quantile crossings on raw (unconstrained) quantile channels
-        for name, value in crossing_metrics.items():
-            self.log(f"{stage}/{name}", value, sync_dist=do_sync)
+        # The total loss is logged every step (progress bar / monitors).
+        self.log(f"{stage}/total", losses["total"], sync_dist=do_sync, prog_bar=True)
 
-        # Monitor quantile calibration (empirical coverage vs nominal levels)
-        for name, value in calibration_metrics.items():
-            self.log(f"{stage}/{name}", value, sync_dist=do_sync)
+        if do_diag:
+            # Log every loss component (total already logged above)
+            for name, value in losses.items():
+                if name != "total":
+                    self.log(f"{stage}/{name}", value, sync_dist=do_sync)
 
-        # Compute and log per-parameter metrics for all stages.
-        # Use predict_physical to add back delta anchors for correct residuals.
-        preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
-        self._log_metrics(preds, targets, valid_mask, stage)
+            # Quantile crossing diagnostics: val/test ONLY (user 2026-07-09 —
+            # dropped from training logging entirely).
+            if stage != "train":
+                crossing_metrics = self.model.loss_module.quantile_crossing_metrics(outputs["pred"], valid_mask=valid_mask)
+                for name, value in crossing_metrics.items():
+                    self.log(f"{stage}/{name}", value, sync_dist=do_sync)
+
+            # Monitor quantile calibration (empirical coverage vs nominal levels)
+            calibration_metrics = self.model.loss_module.quantile_calibration_metrics(outputs["pred"], targets, valid_mask=valid_mask)
+            for name, value in calibration_metrics.items():
+                self.log(f"{stage}/{name}", value, sync_dist=do_sync)
+
+            # Compute and log per-parameter metrics.
+            # Use predict_physical to add back delta anchors for correct residuals.
+            preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
+            self._log_metrics(preds, targets, valid_mask, stage)
 
         return losses["total"]
 
@@ -1065,6 +1088,13 @@ class TrackRegressionWrapper(LightningModule):
             # its own default.
             if "betas" in self.lrs_config:
                 opt_kwargs["betas"] = self.opt_betas
+
+            # Fused Triton Lion: identical update rule, one kernel instead of
+            # hundreds of tiny per-parameter eager kernels (profiled at
+            # ~5 ms/step = 24% of GPU time at BS 2048; see OPTIMIZATION_LOG
+            # 2026-07-09). Opt out with lrs_config: {use_triton: false}.
+            if opt_cls is Lion:
+                opt_kwargs["use_triton"] = bool(self.lrs_config.get("use_triton", True))
 
             opt = opt_cls(self.model.parameters(), **opt_kwargs)
 

@@ -1,0 +1,28 @@
+nsys kernel summary — v3c
+source: docs/perf/profiles/night1/v3c_staged.nsys-rep
+kernels: 3880   GPU busy: 732.182 ms / wall 747.055 ms = 98.0%
+gaps: n=3879 total=14.873 ms
+
+                                                                  total_ms  count  mean_us    pct
+kernel                                                                                           
+constant_pad_nd_mul_select_silu_slice_split_with_sizes_squeeze_1   166.903    160 1043.145 22.795
+28x32_warpgroupsize1x1x1_execute_segment_k_off_kernel__5x_cublas   146.542    460  318.569 20.014
+ge3_warpsize1x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas   141.886    660  214.979 19.379
+dd_clone_mean_mul_permute_pow_rsqrt_silu_split_with_sizes_view_5    88.009    160  550.059 12.020
+lone_mul_permute_silu_softplus_split_with_sizes_unsqueeze_view_4    46.588    160  291.175  6.363
+at::native::                                                        23.911     60  398.512  3.266
+_not_clone_exp_masked_fill_mul_ones_permute_sub_tril_unsqueeze_3    23.712    160  148.202  3.239
+m_expand_gather_mean_mul_pow_rsqrt_rsub_sigmoid_unsqueeze_view_8    17.649     40  441.224  2.410
+at::native::vectorized_elementwise_kernel                           15.279   1180   12.949  2.087
+at::native::index_elementwise_kernel                                12.451     60  207.509  1.700
+triton_poi_fused_expand_gather_unsqueeze_6                          11.367     80  142.091  1.553
+at::native::elementwise_kernel                                      10.421    220   47.367  1.423
+m_expand_gather_mean_mul_pow_rsqrt_rsub_sigmoid_unsqueeze_view_7     8.841     20  442.052  1.207
+m_expand_gather_mean_mul_pow_rsqrt_rsub_sigmoid_unsqueeze_view_9     8.768     20  438.395  1.198
+__unsafe_view_add_cumsum_exp_mul_neg_softplus_split_with_sizes_2     4.316    160   26.977  0.590
+triton_per_fused_add_mean_mul_pow_rsqrt_0                            2.841     20  142.030  0.388
+at::native::reduce_kernel                                            1.270     40   31.742  0.173
+cutlass::Kernel2                                                     0.643     40   16.070  0.088
+at::native::unrolled_elementwise_kernel                              0.340    100    3.402  0.046
+triton_red_fused_add_arange_index_mean_mul_pow_rsqrt_select_10       0.303     20   15.163  0.041
+void                                                                 0.142     60    2.359  0.019
