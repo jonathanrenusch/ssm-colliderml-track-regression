@@ -106,6 +106,51 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
     └── 03_paper_plots.sh
 ```
 
+## Fast short-sequence SSM kernels
+
+The stock `mamba_ssm` chunked selective scan is engineered for sequences of
+many thousands of tokens. Our tracks are at most **22 tokens** (≤20 hits + 2
+CLS). At that length the chunked scan is almost pure launch/bookkeeping
+overhead, and its indexing hits a batch ceiling (~60k tokens per call) long
+before the GPU's memory or compute is used.
+
+This module replaces the *evaluation* of the Mamba2 update — never the math —
+with the algebraically identical **single-chunk SSD quadratic dual**: one
+dense `22×22` lower-triangular (decay ⊙ Gram) product per track. It is
+embarrassingly parallel, has no chunk machinery, and no batch ceiling.
+
+Two interchangeable implementations, both drop-in on a trained checkpoint
+(identical parameter names/shapes — the `state_dict` loads unchanged):
+
+| Impl | File | Use |
+|------|------|-----|
+| Pure-PyTorch quadratic dual (`torch.compile`-friendly) | `src/track_regression/mamba_short.py` (`Mamba2Short`) | training **and** inference; exact autograd |
+| Fused Triton kernels (portable, no Hopper-only features) | `src/track_regression/ops/ssd_short_triton.py` | inference |
+
+### Usage
+
+```python
+from track_regression.mamba_short import apply_variant
+
+# swap the encoder's Mamba2 layers in place (weights preserved):
+apply_variant(model, "v5pc")   # fused Triton, packed stream — fastest inference
+apply_variant(model, "v3c")    # compiled pure-PyTorch — training / portable
+apply_variant(model, "v0")     # no-op: stock chunked kernel (reference)
+```
+
+### Correctness & precision
+
+Every variant is gated by a fp64-anchored oracle chain in
+`tests/test_mamba2short.py`: pure-algebra check against an independent fp64
+reference, stock-kernel parity, full-encoder parity vs the packed stock path,
+fp64 gradcheck, and fused-Triton-vs-PyTorch equality. The new path runs
+**strict IEEE fp32** internally; by fp64 referee it is markedly closer to the
+exact math than the stock kernel, whose internal matmuls default to TF32.
+
+```bash
+pixi run -e default pytest tests/test_mamba2short.py -v   # requires a GPU
+```
+
 ## Quickstart
 
 ```bash
