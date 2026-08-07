@@ -323,6 +323,61 @@ class ColliderMLStreamingDataset(IterableDataset):
         ]
         return min(rank_totals)
 
+    def batches_per_epoch(self, batch_size: int, num_workers: int) -> int:
+        """Exact number of batches the DataLoader will yield this epoch.
+
+        The naive DataLoader length estimate (``total_tracks // batch_size``)
+        overestimates the real count: with N workers each worker batches its
+        own shard subset independently, so ``drop_last`` discards up to
+        ``batch_size - 1`` tracks *per worker*, not per epoch.  Lightning uses
+        the estimate to schedule end-of-epoch validation
+        (``val_check_batch``); when the iterator exhausts before that batch
+        index, validation is silently skipped — and under DDP, ranks that
+        disagree on the batch count deadlock in the epoch-end NCCL sync.
+
+        This mirrors ``__iter__``'s epoch shard shuffle, rank/worker
+        partitioning and per-worker yield caps, then applies the per-worker
+        ``drop_last`` flooring.  Returns the minimum across DDP ranks so all
+        ranks can be capped to an identical step count.
+        """
+        if dist.is_available() and dist.is_initialized():
+            world_size = dist.get_world_size()
+        else:
+            world_size = 1
+        num_workers = max(1, num_workers)
+
+        rng = np.random.RandomState(self.seed + self._epoch)
+        shards = np.array(self.shard_indices)
+        rng.shuffle(shards)
+
+        min_rank_total = (
+            self._min_tracks_across_ranks(shards, world_size) if world_size > 1 else 0
+        )
+
+        rank_batches = []
+        for r in range(world_size):
+            shards_for_rank = shards[r::world_size]
+            worker_totals = [
+                sum(self._tracks_per_shard.get(int(s), 0)
+                    for s in shards_for_rank[w::num_workers])
+                for w in range(num_workers)
+            ]
+            if world_size > 1:
+                # Same cap arithmetic as __iter__
+                this_rank_total = sum(worker_totals)
+                if this_rank_total > 0:
+                    caps = [
+                        min_rank_total * wt // this_rank_total for wt in worker_totals
+                    ]
+                    shortfall = min_rank_total - sum(caps)
+                    for i in range(shortfall):
+                        caps[i] += 1
+                    worker_totals = caps
+                else:
+                    worker_totals = [0] * num_workers
+            rank_batches.append(sum(wt // batch_size for wt in worker_totals))
+        return min(rank_batches)
+
     def __iter__(self):
         # ---- Determine this worker's shard subset ----
         # DDP rank partitioning
@@ -731,6 +786,7 @@ class ColliderMLRegrDataModule(LightningDataModule):
         self.tail_upsample_weight = float(tail_upsample_weight)
         self._tail_sampler: _StratifiedTailSampler | None = None
 
+        self._orig_limit_train_batches: int | float | None = None
         self._train_ds: ColliderMLTrackDataset | ColliderMLStreamingDataset | None = None
         self._val_ds: ColliderMLTrackDataset | None = None
         self._test_ds: ColliderMLTrackDataset | None = None
@@ -840,20 +896,36 @@ class ColliderMLRegrDataModule(LightningDataModule):
             if isinstance(self._train_ds, ColliderMLStreamingDataset):
                 self._train_ds.set_epoch(self.trainer.current_epoch)
 
-                # ---- DDP batch-count equalisation ----
-                # Even with the per-worker yield cap, DataLoader batching with
-                # drop_last=True can still produce different batch counts across
-                # ranks.  Force all ranks to the same number of training steps
-                # by setting Lightning's limit_train_batches to the minimum
-                # possible batch count.
-                if dist.is_available() and dist.is_initialized():
-                    world_size = dist.get_world_size()
-                    rng = np.random.RandomState(self._train_ds.seed + self.trainer.current_epoch)
-                    shards = np.array(self._train_ds.shard_indices)
-                    rng.shuffle(shards)
-                    min_rank_total = self._train_ds._min_tracks_across_ranks(shards, world_size)
-                    safe_batches = min_rank_total // self.batch_size
-                    self.trainer.limit_train_batches = safe_batches
+                # ---- Exact batch-count cap (single-GPU AND DDP) ----
+                # With num_workers > 1 each worker drops its own drop_last
+                # remainder, so the epoch yields FEWER batches than the
+                # DataLoader length estimate.  Lightning schedules the
+                # end-of-epoch validation at val_check_batch derived from
+                # that estimate — an early-exhausting iterator means
+                # validation (and every val/* metric) is silently skipped.
+                # Under DDP the per-rank counts additionally differ → NCCL
+                # deadlock at the epoch boundary.  Capping
+                # limit_train_batches to the exact minimum-across-ranks
+                # count fixes both: validation triggers via the modulo
+                # check on the true last batch, and all ranks step
+                # identically.  This runs inside train_dataloader() because
+                # Lightning parses limit_train_batches AFTER requesting the
+                # dataloader (fit_loop.setup_data), every reload.
+                exact_batches = self._train_ds.batches_per_epoch(
+                    self.batch_size, self.num_workers
+                )
+                # Remember the ORIGINAL user-configured limit on first call —
+                # we overwrite trainer.limit_train_batches every epoch, so
+                # reading it back later would compare against our own cap.
+                if self._orig_limit_train_batches is None:
+                    self._orig_limit_train_batches = self.trainer.limit_train_batches
+                user_limit = self._orig_limit_train_batches
+                if isinstance(user_limit, int):
+                    # Respect an explicit user cap (e.g. debug runs)
+                    exact_batches = min(user_limit, exact_batches)
+                elif isinstance(user_limit, float) and user_limit != 1.0:
+                    exact_batches = max(1, int(exact_batches * user_limit))
+                self.trainer.limit_train_batches = exact_batches
 
             dl_kwargs: dict = dict(
                 batch_size=self.batch_size,

@@ -592,3 +592,29 @@ metrics@50; logs `*_shortkernel_v2.log`.
 5. Update README (how to run the new kernels, config notes).
 6. ONE clean commit on opt_kernel.
 7. Relaunch both pretrainings with all improvements (v2 → v3 launches).
+
+### Day-plan completion (2026-07-09 afternoon)
+
+- **Training-loop round 2 (profiled):** fused Triton Lion (was 5 ms/step =
+  24% of GPU time in tiny per-param kernels; `lrs_config.use_triton`,
+  default on), quantile CROSSING metrics now val/test-only, all training
+  diagnostics gated at 500 steps, trainer/GradientLogger/progress cadences
+  50→500. Loader re-confirmed not the bottleneck.
+- **"auto" kernel variant is now the config default** (base callbacks):
+  v3c (compiled pure-torch, exact autograd) while training; v5pc (fused
+  packed Triton) in val/test/predict. Verified: eval == v5p at 6e-7,
+  training grads == v3 at 3e-7.
+- **Bug found via py-spy on the live 10L run: a leaf-level
+  `trainer.callbacks:` list REPLACES the base list** — the production 10L
+  config silently dropped the KernelSwapCallback and trained on the STOCK
+  kernel. Fixed (callback repeated in the leaf; footgun documented).
+- **R&D cleanup:** v6/kernel3, zproj epilogue and the v4t TF32 experiment
+  removed from code (history + verdicts preserved in this log);
+  suite 52/52 green. README gained a "Fast short-sequence kernels" section.
+- **ONE clean commit on opt_kernel: 1347e37** (74 files; bulky binaries
+  gitignored).
+- **Pretrainings relaunched (v4, final):** 4L ≈ 33 it/s (was 19.6 at
+  launch-1 → 1.7×), 10L ≈ 12.8 it/s steady (was 8.1 best, and 5.3 while
+  silently on the stock kernel → 1.6×), both full IEEE fp32
+  (TRK_MATMUL_PRECISION=highest), auto kernel confirmed in both logs.
+  Epochs ≈ 12.5 min (4L) / ≈ 32 min (10L).

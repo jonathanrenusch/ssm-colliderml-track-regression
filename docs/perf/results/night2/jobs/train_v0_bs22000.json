@@ -1,0 +1,48 @@
+{
+  "args": {
+    "batch_size": 22000,
+    "num_layers": 4,
+    "dim": 128,
+    "d_state": 16,
+    "warmup": 40,
+    "iters": 100,
+    "seed": 42,
+    "out_json": "docs/perf/results/night2/jobs/train_v0_bs22000.json",
+    "variant": "v0",
+    "out_jsonl": "docs/perf/results/night2/results.jsonl",
+    "job_id": "train_v0_bs22000"
+  },
+  "results": [
+    {
+      "path": "packed",
+      "batch_size": 22000,
+      "iters": 100,
+      "collate_ms": {
+        "med": 75.90334000997245,
+        "p10": 75.14531621709466,
+        "p90": 77.37850197590888
+      },
+      "fwd_ms": {
+        "med": 117.18313628807664,
+        "p10": 116.89785420894623,
+        "p90": 117.44645005092025
+      },
+      "bwd_ms": {
+        "med": 352.9777091462165,
+        "p10": 351.853910041973,
+        "p90": 354.0744409430772
+      },
+      "step_ms": {
+        "med": 546.3249038439244,
+        "p10": 544.614138873294,
+        "p90": 548.3281452208757
+      },
+      "real_hits_per_batch_med": 275878,
+      "padded_hits_per_batch_med": 275878,
+      "samples_per_sec_med": 40269.07769572412,
+      "real_tokens_per_sec_med": 504970.5734791354,
+      "peak_alloc_MiB": 16931.22998046875,
+      "variant": "v0"
+    }
+  ]
+}

@@ -96,6 +96,29 @@ Tests / correctness oracles: `tests/test_packed_equivalence.py`, `tests/test_mam
 
 ## Campaign status (update me — newest first)
 
+- **2026-07-24 (streaming-loader val-skip FIXED, 4L kf_hits fine-tune relaunched):**
+  With `num_workers>1` the streaming loader yielded fewer batches than the
+  DataLoader length estimate (per-worker `drop_last` remainders), so Lightning's
+  modulo-based end-of-epoch check never fired → **validation silently skipped**
+  (the 2026-07-21 100-epoch 4L run had no val metrics at all); same arithmetic
+  explains the multi-GPU epoch-end NCCL hang. Fix in `data.py`:
+  `ColliderMLStreamingDataset.batches_per_epoch()` computes the exact per-epoch
+  count (min across ranks) and `train_dataloader()` caps
+  `trainer.limit_train_batches` to it each reload. Verified exact at 1/5/12
+  workers vs a real DataLoader + 2-epoch smoke run (val logged, ckpts saved).
+  Relaunched 50-epoch 4L kf_hits fine-tune on GPU0 via nohup (12 workers, log
+  `logs/finetune_kfhits/finetune_4L_kfhits_shortkernel_valfix.log`). Multi-GPU
+  fix is by-construction, untested (GPU1 busy with the 10L run).
+
+- **2026-07-09 ~14:30 (day 3 wrap — FINAL pretrain launches v4):** tmux
+  pretrain_4L (~33 it/s) + pretrain_10L (~12.8 it/s), full IEEE fp32, `auto`
+  kernel (v3c train / v5pc eval) now the CONFIG DEFAULT via KernelSwapCallback
+  in the base configs. ⚠ Leaf-level `trainer.callbacks:` lists REPLACE the base
+  list — repeat the KernelSwapCallback in any leaf that defines callbacks (this
+  silently reverted the 10L to the stock kernel once; found by py-spy). Fused
+  Triton Lion default; crossing metrics val-only; diagnostics @500. R&D dead
+  code removed; suite 52/52; commit 1347e37; README documents the kernels.
+
 - **2026-07-09 ~12:40 (precision audit → pretrainings RELAUNCHED as v2):**
   fp64 referee proved the first launches trained with TF32 gradients (train.py's
   "high"): grad rel-err median **53%** vs 0.3% under IEEE. Fixes: (1) train.py now
