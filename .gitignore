@@ -28,3 +28,9 @@ out/
 .vscode/
 .idea/
 *.swp
+
+# Profiling / benchmark artifacts (regenerable; live on the R&D branch)
+*.nsys-rep
+*.ncu-rep
+docs/perf/profiles/
+docs/perf/results/

@@ -106,6 +106,53 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
     └── 03_paper_plots.sh
 ```
 
+## Fast short-sequence SSM kernels (on by default)
+
+Tracks are at most **22 tokens** (≤20 hits + 2 CLS). The stock `mamba_ssm`
+chunked selective scan is built for sequences of thousands of tokens, so at this
+length it is almost pure launch/bookkeeping overhead and hits an indexing ceiling
+(~60–70k tokens per call). This repo replaces the *evaluation* of the Mamba2
+update — never the math — with the algebraically identical **single-chunk SSD
+quadratic dual**: one dense `L×L` (≤22×22) decay-weighted product per track.
+Embarrassingly parallel, no chunk machinery, no batch ceiling.
+
+Two drop-in implementations, both checkpoint-compatible (identical parameter
+names/shapes — a `state_dict` loads unchanged):
+
+| Impl | File | Use |
+|------|------|-----|
+| Pure-PyTorch quadratic dual (`torch.compile`-friendly, exact autograd) | `src/track_regression/mamba_short.py` (`Mamba2Short`) | training **and** inference |
+| Fused portable Triton kernels (no Hopper-only features) | `src/track_regression/ops/ssd_short_triton.py` | inference |
+
+**On by default.** Every SSM-CLS config ships a
+`KernelSwapCallback(variant: auto)` in its callbacks: while **training** the
+encoder runs the compiled pure-PyTorch dual (`v3c`, exact gradients, ~1.6–2.5×
+faster steps); in **validation / test / predict** it runs the fused Triton packed
+kernels (`v5pc`, ~5× inference throughput, batch ceiling lifted to 600k+ tracks
+per call). No action needed — to fall back to the stock kernel, remove the
+callback (or set `variant: v0`).
+
+Ad-hoc selection in code (e.g. for a script or notebook):
+
+```python
+from track_regression.mamba_short import apply_variant
+apply_variant(model, "v5pc")   # fused Triton, packed — fastest inference
+apply_variant(model, "v3c")    # compiled pure-PyTorch — training / portable
+apply_variant(model, "v0")     # no-op: stock chunked kernel (reference)
+```
+
+**Correctness & precision.** Every variant is gated by an fp64-anchored oracle
+chain in `tests/test_mamba2short.py` (pure-algebra vs an independent fp64
+reference, stock-kernel parity, full-encoder parity vs the packed stock path,
+fp64 gradcheck, fused-Triton-vs-PyTorch equality). The new path runs **strict
+IEEE fp32** internally; new trainings should export `TRK_MATMUL_PRECISION=highest`
+(full fp32 in the projection GEMMs too). Kernel shape constraints: `d_state` a
+power of 2 (≥16), `ngroups=1`.
+
+```bash
+pixi run -e default pytest tests/test_mamba2short.py -v   # requires a GPU
+```
+
 ## Quickstart
 
 ```bash
