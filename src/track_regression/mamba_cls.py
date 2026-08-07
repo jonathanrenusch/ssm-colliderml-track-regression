@@ -155,6 +155,8 @@ class BidirectionalMambaCLSFinalLayer(nn.Module):
         flip_indices: Tensor | None = None,
         cls_fwd_positions: Tensor | None = None,
         cls_bwd_positions: Tensor | None = None,
+        lens: Tensor | None = None,
+        cu_seqlens: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Forward pass.
 
@@ -168,17 +170,39 @@ class BidirectionalMambaCLSFinalLayer(nn.Module):
         skip = x
         x_norm = self.norm(x).contiguous()
 
-        x_fwd = self.forward_mamba(x_norm, seq_idx=seq_idx)
+        if (
+            cu_seqlens is not None
+            and getattr(self, "_packed_fused", False)
+        ):
+            # v5p packed-stream fused path (see fused_bidi_scan_packed).
+            from .mamba_short import fused_bidi_scan_packed
 
-        if flip_indices is None:
-            x_bwd_in = torch.flip(x_norm, dims=[1]).contiguous()
-            x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
-            x_bwd = torch.flip(x_bwd_out, dims=[1])
+            x_fwd, x_bwd = fused_bidi_scan_packed(self, x_norm, cu_seqlens)
+        elif (
+            flip_indices is not None
+            and flip_indices.dim() == 2
+            and hasattr(self, "_fused_in_w")
+        ):
+            # V4.1 fused path (see mamba_short.fused_bidi_scan).
+            from .mamba_short import fused_bidi_scan
+
+            x_fwd, x_bwd = fused_bidi_scan(self, x_norm, flip_indices, lens)
         else:
-            gather_idx = flip_indices.unsqueeze(0).unsqueeze(-1).expand_as(x_norm)
-            x_bwd_in = torch.gather(x_norm, 1, gather_idx).contiguous()
-            x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
-            x_bwd = torch.gather(x_bwd_out, 1, gather_idx)
+            x_fwd = self.forward_mamba(x_norm, seq_idx=seq_idx)
+
+            if flip_indices is None:
+                x_bwd_in = torch.flip(x_norm, dims=[1]).contiguous()
+                x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
+                x_bwd = torch.flip(x_bwd_out, dims=[1])
+            else:
+                if flip_indices.dim() == 1:
+                    gather_idx = flip_indices.unsqueeze(0).unsqueeze(-1).expand_as(x_norm)
+                else:
+                    # Padded-static mode — per-row (B, L) valid-prefix flip.
+                    gather_idx = flip_indices.unsqueeze(-1).expand_as(x_norm)
+                x_bwd_in = torch.gather(x_norm, 1, gather_idx).contiguous()
+                x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
+                x_bwd = torch.gather(x_bwd_out, 1, gather_idx)
 
         gate = self.gate_activation(self.gate(x_norm))
         x_combined = gate * x_fwd + (1 - gate) * x_bwd
@@ -192,10 +216,16 @@ class BidirectionalMambaCLSFinalLayer(nn.Module):
             # Padded mode — fixed terminal positions per batch row.
             cls_fwd_out = output[:, -1, :]   # forward scan terminal → cls_fwd
             cls_bwd_out = output[:, 0, :]    # backward scan terminal → cls_bwd
-        else:
+        elif output.shape[0] == 1 and cls_bwd_positions is not None:
             # Packed mode — gather at per-segment terminal positions.
             cls_fwd_out = output[0, cls_fwd_positions, :]  # (B, D)
             cls_bwd_out = output[0, cls_bwd_positions, :]  # (B, D)
+        else:
+            # Padded-static mode — cls_fwd sits at the per-row compacted
+            # position Lr+1; cls_bwd is always at column 0.
+            rows = torch.arange(output.shape[0], device=output.device)
+            cls_fwd_out = output[rows, cls_fwd_positions, :]  # (B, D)
+            cls_bwd_out = output[:, 0, :]                     # (B, D)
 
         return output, cls_fwd_out, cls_bwd_out
 
@@ -355,9 +385,32 @@ class BidirectionalMambaCLSEncoder(nn.Module):
             - Pooled CLS summary, shape ``(B, 2 * D)``.
         """
         if cu_seqlens is not None:
+            use_static = getattr(self, "_static_mode", False)
+            if use_static and getattr(self, "_auto_kernel", False) and not self.training:
+                # auto mode: eval/val/test ride the fused packed path (v5pc).
+                use_static = False
+            if use_static:
+                return self._forward_padded_static(x, cu_seqlens)
             return self._forward_packed(x, seq_idx, cu_seqlens)
 
         B = x.shape[0]
+
+        # The legacy padded path is knowingly NOT equivalent to packed mode
+        # for variable-length tracks: pad tokens leak into the scan state,
+        # cls_fwd sits after the pad slots (wrong conv window / state), and
+        # pads argsort to the front (hit_time == 0.0). Kept for backward
+        # compatibility only. Use packed mode (cu_seqlens) or the padded-
+        # static campaign path (enable_static_mode) instead.
+        import warnings
+
+        warnings.warn(
+            "BidirectionalMambaCLSEncoder padded path is deprecated: it is "
+            "not physics-equivalent to packed mode for variable-length "
+            "tracks (pad leakage + CLS placement + hit_time-0 sort). Use "
+            "packed batches or enable_static_mode().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         # Optional sort (e.g. by distance from IP).  CLS tokens are inserted
         # AFTER this step — the plan calls this out explicitly because
@@ -406,6 +459,130 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         cls_concat = cls_concat + 0.0 * x_hits.float().sum()
 
         return x_hits, cls_concat
+
+    def enable_static_mode(self, compile_core: bool = False) -> None:
+        """Switch packed inputs onto the padded-static (B, 22, D) path.
+
+        Campaign hook (see ``mamba_short.apply_variant``): the packed batch
+        from the unchanged dataloader is scattered into compacted static
+        rows ``[cls_bwd, h_0..h_{Lr-1}, cls_fwd, PAD..]`` on GPU — pads
+        strictly trail in both scan directions (per-row valid-prefix flip),
+        so no masking is needed inside the Mamba blocks (Scheme A).
+        """
+        self._static_mode = True
+        self._static_core_fn = self._static_core
+        if compile_core:
+            self._static_core_fn = torch.compile(self._static_core, dynamic=False)
+
+    def _static_core(
+        self,
+        x_aug: Tensor,
+        valid: Tensor,
+        flip_idx: Tensor,
+        cls_fwd_pos: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Static-shape layer stack — the compilable core."""
+        vm = valid.unsqueeze(-1).to(x_aug.dtype)
+        # Precompute once: per-row last valid index for the in-kernel flip
+        # (deriving it inside every layer costs a materialisation each time).
+        lens32 = cls_fwd_pos.to(torch.int32).contiguous()
+        for layer in self.layers:
+            # Safety re-zero of pad rows: not required for parity (pads
+            # strictly trail), but bounds pad-row garbage and keeps the
+            # DDP-tie sum over x_hits finite.
+            x_aug = layer(x_aug, seq_idx=None, flip_indices=flip_idx, lens=lens32) * vm
+        x_aug, cls_fwd_out, cls_bwd_out = self.final_layer(
+            x_aug,
+            seq_idx=None,
+            flip_indices=flip_idx,
+            cls_fwd_positions=cls_fwd_pos,
+            cls_bwd_positions=None,
+            lens=lens32,
+        )
+        x_aug = self.final_norm(x_aug) * vm
+        cls_fwd_out = self.cls_norm(cls_fwd_out)
+        cls_bwd_out = self.cls_norm(cls_bwd_out)
+        return x_aug, cls_fwd_out, cls_bwd_out
+
+    def _forward_padded_static(
+        self,
+        x: Tensor,
+        cu_seqlens: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Packed input -> compacted static rows -> quadratic-dual stack.
+
+        Returns the same layout as :meth:`_forward_packed`:
+        ``(1, total_L, D)`` sequence output (CLS stripped) + ``(B, 2*D)``
+        pooled CLS summary — the rest of the model is unchanged.
+        """
+        from .mamba_short import (
+            build_static_aux,
+            packed_to_padded_static,
+            padded_static_to_packed,
+        )
+
+        aux = build_static_aux(cu_seqlens)
+        x_pad, row, col = packed_to_padded_static(x, cu_seqlens, aux)
+
+        B, S, D = x_pad.shape
+        # Grad-safe CLS insertion: the CLS slots (columns 0 and Lr+1) are
+        # zero in x_pad, so a one-hot add places the tokens functionally —
+        # never an in-place write (would sever CLS-token gradients).
+        p = torch.arange(S, device=x_pad.device)
+        onehot_bwd = (p == 0).to(x_pad.dtype).view(1, S, 1)
+        onehot_fwd = (p.unsqueeze(0) == aux["cls_fwd_pos"].unsqueeze(1)).to(
+            x_pad.dtype
+        ).unsqueeze(-1)
+        x_aug = (
+            x_pad
+            + onehot_bwd * self.cls_bwd.to(x_pad.dtype)
+            + onehot_fwd * self.cls_fwd.to(x_pad.dtype)
+        )
+
+        x_aug, cls_fwd_out, cls_bwd_out = self._static_core_fn(
+            x_aug, aux["valid"], aux["flip_idx"], aux["cls_fwd_pos"]
+        )
+
+        # Strip CLS: hits live at (row, col) — gather back to packed layout.
+        x_hits = padded_static_to_packed(x_aug, row, col)
+
+        cls_concat = torch.cat([cls_fwd_out, cls_bwd_out], dim=-1)
+        # DDP unused-parameter tie (numerically a no-op) — same as packed path.
+        cls_concat = cls_concat + 0.0 * x_hits.float().sum()
+        return x_hits, cls_concat
+
+    def _packed_core(
+        self,
+        x_aug: Tensor,
+        aug_seq_idx: Tensor,
+        flip_indices: Tensor,
+        aug_cu: Tensor,
+        cls_fwd_positions: Tensor,
+        cls_bwd_positions: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Layer stack on the packed augmented stream — compilable with
+        dynamic shapes (v5p+compile: `enable_packed_compile`)."""
+        for layer in self.layers:
+            x_aug = layer(
+                x_aug, seq_idx=aug_seq_idx, flip_indices=flip_indices,
+                cu_seqlens=aug_cu,
+            )
+        x_aug, cls_fwd_out, cls_bwd_out = self.final_layer(
+            x_aug,
+            seq_idx=aug_seq_idx,
+            flip_indices=flip_indices,
+            cls_fwd_positions=cls_fwd_positions,
+            cls_bwd_positions=cls_bwd_positions,
+            cu_seqlens=aug_cu,
+        )
+        x_aug = self.final_norm(x_aug)
+        cls_fwd_out = self.cls_norm(cls_fwd_out)
+        cls_bwd_out = self.cls_norm(cls_bwd_out)
+        return x_aug, cls_fwd_out, cls_bwd_out
+
+    def enable_packed_compile(self) -> None:
+        """Compile the packed layer stack with dynamic sequence length."""
+        self._packed_core_fn = torch.compile(self._packed_core, dynamic=True)
 
     def _forward_packed(
         self,
@@ -488,26 +665,17 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         flip_indices = _segment_flip_indices(aug_cu, aug_total)
 
         # Intermediate layers — CLS tokens flow through unchanged, and the
-        # backward Mamba uses segment-wise flip via `flip_indices`.
-        for layer in self.layers:
-            x_aug = layer(x_aug, seq_idx=aug_seq_idx, flip_indices=flip_indices)
-
-        # Final layer also extracts CLS readouts at per-segment boundaries.
-        x_aug, cls_fwd_out, cls_bwd_out = self.final_layer(
-            x_aug,
-            seq_idx=aug_seq_idx,
-            flip_indices=flip_indices,
-            cls_fwd_positions=cls_fwd_positions,
-            cls_bwd_positions=cls_bwd_positions,
+        # backward Mamba uses segment-wise flip via `flip_indices` (or, on
+        # the v5p fused path, in-kernel per-segment flips via `aug_cu`).
+        core_fn = getattr(self, "_packed_core_fn", None) or self._packed_core
+        x_aug, cls_fwd_out, cls_bwd_out = core_fn(
+            x_aug, aug_seq_idx, flip_indices, aug_cu,
+            cls_fwd_positions, cls_bwd_positions,
         )
-
-        x_aug = self.final_norm(x_aug)
 
         # Strip CLS tokens by gathering only original-hit positions.
         x_hits = x_aug[0:1, aug_token_positions, :]  # (1, total_L, D)
 
-        cls_fwd_out = self.cls_norm(cls_fwd_out)
-        cls_bwd_out = self.cls_norm(cls_bwd_out)
         cls_concat = torch.cat([cls_fwd_out, cls_bwd_out], dim=-1)  # (B, 2*D)
 
         # Same DDP unused-parameter tie as in the padded path.

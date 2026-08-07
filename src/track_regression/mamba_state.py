@@ -302,6 +302,8 @@ class BidirectionalMambaLayer(nn.Module):
         x: Tensor,
         seq_idx: Tensor | None = None,
         flip_indices: Tensor | None = None,
+        lens: Tensor | None = None,
+        cu_seqlens: Tensor | None = None,
     ) -> Tensor:
         """Forward pass.
 
@@ -314,26 +316,50 @@ class BidirectionalMambaLayer(nn.Module):
             used in packed mode (resets Mamba-2 SSD state at boundaries).
         flip_indices : Tensor | None
             ``(total_L,)`` long gather index that reverses each segment of
-            the packed sequence in place. When provided, the backward
-            direction uses this segment-wise flip instead of the default
+            the packed sequence in place, OR ``(B, L)`` per-row indices for
+            the padded-static path (valid-prefix flip). When provided, the
+            backward direction uses this flip instead of the default
             global ``torch.flip`` along dim=1. Same indices flip and
-            un-flip (segment reversal is its own inverse).
+            un-flip (segment/prefix reversal is its own inverse).
         """
         skip = x
         x_norm = self.norm(x).contiguous()
 
-        x_fwd = self.forward_mamba(x_norm, seq_idx=seq_idx)
-        if flip_indices is None:
-            # Padded path — global flip suffices (one track per batch row).
-            x_bwd_in = torch.flip(x_norm, dims=[1]).contiguous()
-            x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
-            x_bwd = torch.flip(x_bwd_out, dims=[1])
+        if (
+            cu_seqlens is not None
+            and getattr(self, "_packed_fused", False)
+        ):
+            # v5p: packed-stream fused path — no pad rows anywhere.
+            from .mamba_short import fused_bidi_scan_packed
+
+            x_fwd, x_bwd = fused_bidi_scan_packed(self, x_norm, cu_seqlens)
+        elif (
+            flip_indices is not None
+            and flip_indices.dim() == 2
+            and hasattr(self, "_fused_in_w")
+        ):
+            # V4.1 fused path: one in_proj GEMM for both directions, the
+            # backward flip done in-kernel — no gathers, no separate GEMMs.
+            from .mamba_short import fused_bidi_scan
+
+            x_fwd, x_bwd = fused_bidi_scan(self, x_norm, flip_indices, lens)
         else:
-            # Packed path — segment-wise flip via gather.
-            gather_idx = flip_indices.unsqueeze(0).unsqueeze(-1).expand_as(x_norm)
-            x_bwd_in = torch.gather(x_norm, 1, gather_idx).contiguous()
-            x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
-            x_bwd = torch.gather(x_bwd_out, 1, gather_idx)
+            x_fwd = self.forward_mamba(x_norm, seq_idx=seq_idx)
+            if flip_indices is None:
+                # Padded path — global flip suffices (one track per batch row).
+                x_bwd_in = torch.flip(x_norm, dims=[1]).contiguous()
+                x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
+                x_bwd = torch.flip(x_bwd_out, dims=[1])
+            else:
+                # Packed (1-D indices) or padded-static (2-D per-row indices) —
+                # segment-/prefix-wise flip via gather.
+                if flip_indices.dim() == 1:
+                    gather_idx = flip_indices.unsqueeze(0).unsqueeze(-1).expand_as(x_norm)
+                else:
+                    gather_idx = flip_indices.unsqueeze(-1).expand_as(x_norm)
+                x_bwd_in = torch.gather(x_norm, 1, gather_idx).contiguous()
+                x_bwd_out = self.backward_mamba(x_bwd_in, seq_idx=seq_idx)
+                x_bwd = torch.gather(x_bwd_out, 1, gather_idx)
 
         gate = self.gate_activation(self.gate(x_norm))
         x_combined = gate * x_fwd + (1 - gate) * x_bwd

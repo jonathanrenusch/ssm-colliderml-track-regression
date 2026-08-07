@@ -23,7 +23,21 @@ warnings.filterwarnings("ignore", message=".*barrier.*device under current conte
 
 import torch
 
-torch.set_float32_matmul_precision("high")
+# fp32 matmul precision. "high" (historical default) lets cuBLAS use TF32
+# tensor cores: only 10 mantissa bits (~3 decimal digits) INSIDE every
+# nn.Linear GEMM — and, for the pure-torch quadratic-dual kernel path, inside
+# the scan matmuls too. This regression problem needs the 5th decimal place,
+# so the kernel-campaign pretrains run with TRK_MATMUL_PRECISION=highest
+# (full IEEE fp32, 23 mantissa bits, everywhere). The default stays "high"
+# only so that fine-tunes of checkpoints TRAINED under "high" keep their
+# historical numerics; new trainings should export TRK_MATMUL_PRECISION=highest.
+import os as _os
+
+_MATMUL_PRECISION = _os.environ.get("TRK_MATMUL_PRECISION", "high")
+torch.set_float32_matmul_precision(_MATMUL_PRECISION)
+print(f"[train] float32_matmul_precision = {_MATMUL_PRECISION!r}"
+      + (" (TF32 GEMMs!)" if _MATMUL_PRECISION == "high" else " (full IEEE fp32)"),
+      flush=True)
 
 from pathlib import Path
 
