@@ -6,7 +6,7 @@ up 34 days (long-lived — eviction is possible but not the norm). Filesystems:
 
 | Path | Type | Kerberos-gated | Survives pod restart | Use for |
 |------|------|----------------|----------------------|---------|
-| `/afs/cern.ch/user/j/jorenusc` (home, **`~/.claude` lives here**) | AFS | **YES — token expires daily** | yes | nothing overnight-critical except Claude's own state |
+| `/afs/cern.ch/user/<u>/<user>` (home, **`~/.claude` lives here**) | AFS | **YES — token expires daily** | yes | nothing overnight-critical except Claude's own state |
 | `/shared` (repo, NFS PVC) | nfs4 | no | yes | **all results, logs, dashboards, queue state** |
 | `/scratch` (node NVMe) | xfs | no | node-local (host mount) | dataset reads, big temporaries |
 | `/tmp` | overlay | no | **NO** | Triton cache only (rebuilds itself) |
@@ -18,7 +18,7 @@ up 34 days (long-lived — eviction is possible but not the norm). Filesystems:
    (Belt-and-braces: even if it drops, steps 3–4 make the remote side immune.)
 2. **Fresh Kerberos + auto-renew (on the pod):**
    ```bash
-   kinit jorenusc@CERN.CH          # fresh 24h ticket (renewable ~5 days)
+   kinit <user>@CERN.CH          # fresh 24h ticket (renewable ~5 days)
    aklog                            # fresh AFS token
    krenew -b -t -K 60               # daemon: renew ticket every 60 min AND
                                     # re-run aklog (-t) so AFS never expires
@@ -54,7 +54,7 @@ up 34 days (long-lived — eviction is possible but not the norm). Filesystems:
   unaffected; reattach in the morning.
 - **Kerberos/AFS token expiry (default: daily ~15:44)** → `krenew -b -t`;
   additionally nothing on the critical benchmark path reads/writes AFS.
-  Fallback if krenew dies: `k5start -f /tmp/krb5cc_177080 -K 60 -t -b`.
+  Fallback if krenew dies: `k5start -f /tmp/krb5cc_<uid> -K 60 -t -b`.
 - **Pod eviction/restart (rare but possible on k8s)** → everything resumable:
   queue state + results on `/shared`; `/tmp` Triton cache and any `/scratch`
   temporaries are expendable. After a restart: re-`kinit`, reattach, rerun the

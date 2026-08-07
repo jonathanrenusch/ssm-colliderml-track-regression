@@ -1,0 +1,1330 @@
+[arch] env: {'git_sha': '1347e37f3901f7ebfeaabe88d62df612b8d46ed9', 'torch': '2.9.1+cu128', 'triton': '3.5.1', 'mamba_ssm': '2.3.0', 'gpu_name': 'NVIDIA H100 NVL', 'hostname': 'sess3', 'cuda_visible_devices': '1'}
+[arch] precision: {'float32_matmul_precision': 'high', 'cuda_matmul_allow_tf32': True, 'cudnn_allow_tf32': True, 'cudnn_conv_fp32_precision': 'tf32', 'cuda_matmul_fp32_precision': 'tf32'}
+[common] data-path override: '/scratch/colliderml/arxiv_retraining/p200_core_kf_hits_finetune' -> '/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune'
+[arch] fixed batch: {'batch_tracks': 16384, 'batch_tokens': 214254, 'len_mean': 13.077, 'len_min': 6, 'len_max': 20}
+[arch] 39 architectures to sweep (target 16384 tracks, 50 warmup + 300 timed iters each)
+
+[arch] === 1/39  L4_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.028 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N16_HD32_G1: t2k=2.25738ms tracks/s=885983 CV=0.639% params=1.0284M [v5pc]
+
+[arch] === 2/39  L1_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 0.348 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L1_D128_N16_HD32_G1: t2k=0.78383ms tracks/s=2551588 CV=0.684% params=0.3477M [v5pc]
+
+[arch] === 3/39  L2_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 0.575 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L2_D128_N16_HD32_G1: t2k=1.2773ms tracks/s=1565800 CV=3.228% params=0.5746M [v5pc]
+
+[arch] === 4/39  L3_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 0.802 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L3_D128_N16_HD32_G1: t2k=1.77657ms tracks/s=1125762 CV=0.866% params=0.8015M [v5pc]
+
+[arch] === 5/39  L6_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.482 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L6_D128_N16_HD32_G1: t2k=3.30131ms tracks/s=605820 CV=1.076% params=1.4823M [v5pc]
+
+[arch] === 6/39  L8_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.936 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L8_D128_N16_HD32_G1: t2k=4.33764ms tracks/s=461080 CV=1.1% params=1.9362M [v5pc]
+
+[arch] === 7/39  L10_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 2.390 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L10_D128_N16_HD32_G1: t2k=5.39763ms tracks/s=370533 CV=0.996% params=2.39M [v5pc]
+
+[arch] === 8/39  L12_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 2.844 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L12_D128_N16_HD32_G1: t2k=6.469ms tracks/s=309167 CV=0.819% params=2.8439M [v5pc]
+
+[arch] === 9/39  L16_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 3.752 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L16_D128_N16_HD32_G1: t2k=8.57578ms tracks/s=233215 CV=0.745% params=3.7516M [v5pc]
+
+[arch] === 10/39  L20_D128_N16_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 4.659 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L20_D128_N16_HD32_G1: t2k=10.6964ms tracks/s=186979 CV=0.871% params=4.6593M [v5pc]
+
+[arch] === 11/39  L4_D64_N16_HD32_G1 (nheads=4, d_inner=128) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 0.335 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D64_N16_HD32_G1: t2k=1.33756ms tracks/s=1495255 CV=0.284% params=0.3353M [v5pc]
+
+[arch] === 12/39  L4_D96_N16_HD32_G1 (nheads=6, d_inner=192) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 0.628 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D96_N16_HD32_G1: t2k=1.92634ms tracks/s=1038239 CV=1.674% params=0.6281M [v5pc]
+
+[arch] === 13/39  L4_D160_N16_HD32_G1 (nheads=10, d_inner=320) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.536 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D160_N16_HD32_G1: t2k=3.40421ms tracks/s=587508 CV=1.347% params=1.5363M [v5pc]
+
+[arch] === 14/39  L4_D192_N16_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 2.152 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D192_N16_HD32_G1: t2k=3.63083ms tracks/s=550838 CV=0.947% params=2.1517M [v5pc]
+
+[arch] === 15/39  L4_D256_N16_HD32_G1 (nheads=16, d_inner=512) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 3.705 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D256_N16_HD32_G1: t2k=4.63503ms tracks/s=431497 CV=0.915% params=3.705M [v5pc]
+
+[arch] === 16/39  L4_D320_N16_HD32_G1 (nheads=20, d_inner=640) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 5.688 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D320_N16_HD32_G1: t2k=6.49383ms tracks/s=307985 CV=0.756% params=5.6884M [v5pc]
+
+[arch] === 17/39  L4_D384_N16_HD32_G1 (nheads=24, d_inner=768) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 8.102 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D384_N16_HD32_G1: t2k=7.9822ms tracks/s=250558 CV=0.974% params=8.1019M [v5pc]
+
+[arch] === 18/39  L4_D512_N16_HD32_G1 (nheads=32, d_inner=1024) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 14.219 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D512_N16_HD32_G1: t2k=10.78716ms tracks/s=185406 CV=0.967% params=14.219M [v5pc]
+
+[arch] === 19/39  L4_D128_N8_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.011 M   weights: RANDOM INIT
+[arch] FAILED L4_D128_N8_HD32_G1: CompilationError: at 58:8:
+        roff = (base + row.to(tl.int64))[:, None] * DPROJ_TOT
+        wb = tl.load(convw_ptr + (HP + offs_n) * DCONV + k)
+        wc = tl.load(convw_ptr + (HP + N + offs_n) * DCONV + k)
+        b_acc += wb[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+        c_acc += wc[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + N + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+    b_acc += tl.load(convb_ptr + HP + offs_n)[None, :]
+    c_acc += tl.load(convb_ptr + HP + N + offs_n)[None, :]
+    Bm = b_acc * tl.sigmoid(b_acc)
+    Cm = c_acc * tl.sigmoid(c_acc)
+    G = tl.dot(Cm, tl.trans(Bm), input_precision="ieee")
+        ^
+Input shapes should have M >= 1, N >= 1 and K >= 16
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 43, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 2021, in dot
+    return _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/semantic.py", line 1520, in dot
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+AssertionError: Input shapes should have M >= 1, N >= 1 and K >= 16
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 193, in main
+    times = bv.timed_forward_loop(model, gpu_inputs, args.warmup, args.timed_iters)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/bench_variant.py", line 255, in timed_forward_loop
+    model(inputs)
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/model.py", line 572, in forward
+    _, pooled = self.encoder(
+                ^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 394, in forward
+    return self._forward_packed(x, seq_idx, cu_seqlens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 671, in _forward_packed
+    x_aug, cls_fwd_out, cls_bwd_out = core_fn(
+                                      ^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 832, in compile_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 554, in _packed_core
+    def _packed_core(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 1130, in forward
+    return compiled_fn(full_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 353, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 724, in inner_fn
+    outs = compiled_fn(args)
+           ^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 526, in wrapper
+    return compiled_fn(runtime_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/output_code.py", line 613, in __call__
+    return self.current_callable(inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/utils.py", line 3017, in run
+    out = model(new_inputs)
+          ^^^^^^^^^^^^^^^^^
+  File "/tmp/torchinductor_<user>/6q/c6qgmfzecc2ryl7qt6eaz5uzhpvydm2kqobikbiedyc466mukblm.py", line 544, in call
+    buf4 = torch.ops.track_regression.ssd_short_fwd_packed.default(buf3, arg7_1, arg8_1, arg9_1, arg10_1, arg11_1, arg4_1, 8, 32, 8, reverse=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 343, in backend_impl
+    result = self._backend_fns[device_type](*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_compile.py", line 53, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 376, in wrapped_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/ops/ssd_short_triton.py", line 496, in ssd_short_fwd_packed
+    _ssd_short_fwd_kernel2p[grid](
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 419, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 238, in run
+    benchmark()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 227, in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 162, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/testing.py", line 149, in do_bench
+    fn()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 148, in kernel_call
+    self.fn.run(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 733, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 861, in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 300, in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 80, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 58:8:
+        roff = (base + row.to(tl.int64))[:, None] * DPROJ_TOT
+        wb = tl.load(convw_ptr + (HP + offs_n) * DCONV + k)
+        wc = tl.load(convw_ptr + (HP + N + offs_n) * DCONV + k)
+        b_acc += wb[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+        c_acc += wc[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + N + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+    b_acc += tl.load(convb_ptr + HP + offs_n)[None, :]
+    c_acc += tl.load(convb_ptr + HP + N + offs_n)[None, :]
+    Bm = b_acc * tl.sigmoid(b_acc)
+    Cm = c_acc * tl.sigmoid(c_acc)
+    G = tl.dot(Cm, tl.trans(Bm), input_precision="ieee")
+        ^
+Input shapes should have M >= 1, N >= 1 and K >= 16
+
+
+[arch] === 20/39  L4_D128_N24_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.045 M   weights: RANDOM INIT
+[arch] FAILED L4_D128_N24_HD32_G1: CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 43, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 1638, in arange
+    return _semantic.arange(start, end)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/semantic.py", line 583, in arange
+    raise ValueError("arange's range must be a power of 2")
+ValueError: arange's range must be a power of 2
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 193, in main
+    times = bv.timed_forward_loop(model, gpu_inputs, args.warmup, args.timed_iters)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/bench_variant.py", line 255, in timed_forward_loop
+    model(inputs)
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/model.py", line 572, in forward
+    _, pooled = self.encoder(
+                ^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 394, in forward
+    return self._forward_packed(x, seq_idx, cu_seqlens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 671, in _forward_packed
+    x_aug, cls_fwd_out, cls_bwd_out = core_fn(
+                                      ^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 832, in compile_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 554, in _packed_core
+    def _packed_core(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 1130, in forward
+    return compiled_fn(full_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 353, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 724, in inner_fn
+    outs = compiled_fn(args)
+           ^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 526, in wrapper
+    return compiled_fn(runtime_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/output_code.py", line 613, in __call__
+    return self.current_callable(inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/utils.py", line 3017, in run
+    out = model(new_inputs)
+          ^^^^^^^^^^^^^^^^^
+  File "/tmp/torchinductor_<user>/3x/c3xkdm6hj5uc5mp2esxotpojfgekqsrj3nr2xccl6wfkllnezblm.py", line 544, in call
+    buf4 = torch.ops.track_regression.ssd_short_fwd_packed.default(buf3, arg7_1, arg8_1, arg9_1, arg10_1, arg11_1, arg4_1, 8, 32, 24, reverse=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 343, in backend_impl
+    result = self._backend_fns[device_type](*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_compile.py", line 53, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 376, in wrapped_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/ops/ssd_short_triton.py", line 496, in ssd_short_fwd_packed
+    _ssd_short_fwd_kernel2p[grid](
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 419, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 238, in run
+    benchmark()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 227, in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 162, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/testing.py", line 149, in do_bench
+    fn()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 148, in kernel_call
+    self.fn.run(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 733, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 861, in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 300, in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 80, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+
+
+[arch] === 21/39  L4_D128_N32_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.062 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N32_HD32_G1: t2k=2.44384ms tracks/s=818383 CV=0.781% params=1.0625M [v5pc]
+
+[arch] === 22/39  L4_D128_N48_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.097 M   weights: RANDOM INIT
+[arch] FAILED L4_D128_N48_HD32_G1: CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 43, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 1638, in arange
+    return _semantic.arange(start, end)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/semantic.py", line 583, in arange
+    raise ValueError("arange's range must be a power of 2")
+ValueError: arange's range must be a power of 2
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 193, in main
+    times = bv.timed_forward_loop(model, gpu_inputs, args.warmup, args.timed_iters)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/bench_variant.py", line 255, in timed_forward_loop
+    model(inputs)
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/model.py", line 572, in forward
+    _, pooled = self.encoder(
+                ^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 394, in forward
+    return self._forward_packed(x, seq_idx, cu_seqlens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 671, in _forward_packed
+    x_aug, cls_fwd_out, cls_bwd_out = core_fn(
+                                      ^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 832, in compile_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 554, in _packed_core
+    def _packed_core(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 1130, in forward
+    return compiled_fn(full_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 353, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 724, in inner_fn
+    outs = compiled_fn(args)
+           ^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 526, in wrapper
+    return compiled_fn(runtime_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/output_code.py", line 613, in __call__
+    return self.current_callable(inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/utils.py", line 3017, in run
+    out = model(new_inputs)
+          ^^^^^^^^^^^^^^^^^
+  File "/tmp/torchinductor_<user>/o4/co4l4lutbpkdcucnyq3ck7tduyrx6xfrbsz564gkbz37krwofnvw.py", line 544, in call
+    buf4 = torch.ops.track_regression.ssd_short_fwd_packed.default(buf3, arg7_1, arg8_1, arg9_1, arg10_1, arg11_1, arg4_1, 8, 32, 48, reverse=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 343, in backend_impl
+    result = self._backend_fns[device_type](*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_compile.py", line 53, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 376, in wrapped_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/ops/ssd_short_triton.py", line 496, in ssd_short_fwd_packed
+    _ssd_short_fwd_kernel2p[grid](
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 419, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 238, in run
+    benchmark()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 227, in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 162, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/testing.py", line 149, in do_bench
+    fn()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 148, in kernel_call
+    self.fn.run(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 733, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 861, in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 300, in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 80, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+
+
+[arch] === 23/39  L4_D128_N64_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.131 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N64_HD32_G1: t2k=2.64038ms tracks/s=757468 CV=0.129% params=1.1306M [v5pc]
+
+[arch] === 24/39  L4_D128_N96_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.199 M   weights: RANDOM INIT
+[arch] FAILED L4_D128_N96_HD32_G1: CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 43, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/core.py", line 1638, in arange
+    return _semantic.arange(start, end)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/language/semantic.py", line 583, in arange
+    raise ValueError("arange's range must be a power of 2")
+ValueError: arange's range must be a power of 2
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 193, in main
+    times = bv.timed_forward_loop(model, gpu_inputs, args.warmup, args.timed_iters)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/bench_variant.py", line 255, in timed_forward_loop
+    model(inputs)
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/model.py", line 572, in forward
+    _, pooled = self.encoder(
+                ^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 394, in forward
+    return self._forward_packed(x, seq_idx, cu_seqlens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 671, in _forward_packed
+    x_aug, cls_fwd_out, cls_bwd_out = core_fn(
+                                      ^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 832, in compile_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_cls.py", line 554, in _packed_core
+    def _packed_core(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/aot_autograd.py", line 1130, in forward
+    return compiled_fn(full_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 353, in runtime_wrapper
+    all_outs = call_func_at_runtime_with_args(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 129, in call_func_at_runtime_with_args
+    out = normalize_as_list(f(args))
+                            ^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 724, in inner_fn
+    outs = compiled_fn(args)
+           ^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/runtime_wrappers.py", line 526, in wrapper
+    return compiled_fn(runtime_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/output_code.py", line 613, in __call__
+    return self.current_callable(inputs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_inductor/utils.py", line 3017, in run
+    out = model(new_inputs)
+          ^^^^^^^^^^^^^^^^^
+  File "/tmp/torchinductor_<user>/ym/cymkfrljw4m6hqqt2kowg3z4xmipudrffhts3jb3v2u7cutusdvq.py", line 544, in call
+    buf4 = torch.ops.track_regression.ssd_short_fwd_packed.default(buf3, arg7_1, arg8_1, arg9_1, arg10_1, arg11_1, arg4_1, 8, 32, 96, reverse=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_ops.py", line 841, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 343, in backend_impl
+    result = self._backend_fns[device_type](*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_compile.py", line 53, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/torch/_library/custom_ops.py", line 376, in wrapped_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/ops/ssd_short_triton.py", line 496, in ssd_short_fwd_packed
+    _ssd_short_fwd_kernel2p[grid](
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 419, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 238, in run
+    benchmark()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 227, in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 162, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/testing.py", line 149, in do_bench
+    fn()
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 148, in kernel_call
+    self.fn.run(
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 733, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/runtime/jit.py", line 861, in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 300, in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/.pixi/envs/default/lib/python3.12/site-packages/triton/compiler/compiler.py", line 80, in make_ir
+    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+triton.compiler.errors.CompilationError: at 32:13:
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)  # segment length (Lr + 2), <= BL
+
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+             ^
+arange's range must be a power of 2
+
+
+[arch] === 25/39  L4_D128_N128_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.267 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N128_HD32_G1: t2k=3.78285ms tracks/s=528702 CV=0.142% params=1.2668M [v5pc]
+
+[arch] === 26/39  L4_D128_N16_HD16_G1 (nheads=16, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.037 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N16_HD16_G1: t2k=2.5292ms tracks/s=790763 CV=0.159% params=1.0368M [v5pc]
+
+[arch] === 27/39  L4_D128_N16_HD64_G1 (nheads=4, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.024 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N16_HD64_G1: t2k=2.86786ms tracks/s=697383 CV=1.635% params=1.0243M [v5pc]
+
+[arch] === 28/39  L4_D128_N16_HD128_G1 (nheads=2, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.022 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D128_N16_HD128_G1: t2k=1.64729ms tracks/s=1214115 CV=1.776% params=1.0222M [v5pc]
+
+[arch] === 29/39  L4_D128_N16_HD32_G2 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.062 M   weights: RANDOM INIT
+[arch] v5pc failed (NotImplementedError: Mamba2Short supports ngroups=1 only); trying v5p
+[arch] FAILED L4_D128_N16_HD32_G2: NotImplementedError: Mamba2Short supports ngroups=1 only
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 132, in apply_kernel
+    return apply_variant(model, primary) or model, primary
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 191, in main
+    model, used = apply_kernel(model, args.variant)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 136, in apply_kernel
+    return apply_variant(model, "v5p") or model, "v5p"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+
+[arch] === 30/39  L4_D128_N16_HD32_G4 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.131 M   weights: RANDOM INIT
+[arch] v5pc failed (NotImplementedError: Mamba2Short supports ngroups=1 only); trying v5p
+[arch] FAILED L4_D128_N16_HD32_G4: NotImplementedError: Mamba2Short supports ngroups=1 only
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 132, in apply_kernel
+    return apply_variant(model, primary) or model, primary
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 191, in main
+    model, used = apply_kernel(model, args.variant)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 136, in apply_kernel
+    return apply_variant(model, "v5p") or model, "v5p"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+
+[arch] === 31/39  L4_D128_N16_HD32_G8 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.267 M   weights: RANDOM INIT
+[arch] v5pc failed (NotImplementedError: Mamba2Short supports ngroups=1 only); trying v5p
+[arch] FAILED L4_D128_N16_HD32_G8: NotImplementedError: Mamba2Short supports ngroups=1 only
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 132, in apply_kernel
+    return apply_variant(model, primary) or model, primary
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 191, in main
+    model, used = apply_kernel(model, args.variant)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/scripts/perf/arch_sweep.py", line 136, in apply_kernel
+    return apply_variant(model, "v5p") or model, "v5p"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 640, in apply_variant
+    _swap_mamba(layer, "forward_mamba", impl)
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 558, in _swap_mamba
+    short = (cls or Mamba2Short)(
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/shared/tracking/ssm-colliderml-track-regression/src/track_regression/mamba_short.py", line 97, in __init__
+    raise NotImplementedError("Mamba2Short supports ngroups=1 only")
+NotImplementedError: Mamba2Short supports ngroups=1 only
+
+
+[arch] === 32/39  L10_D192_N32_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 5.287 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L10_D192_N32_HD32_G1: t2k=9.47173ms tracks/s=211155 CV=0.633% params=5.2868M [v5pc]
+
+[arch] === 33/39  L10_D192_N16_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 5.161 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L10_D192_N16_HD32_G1: t2k=8.8787ms tracks/s=225258 CV=0.829% params=5.1608M [v5pc]
+
+[arch] === 34/39  L10_D192_N64_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 5.539 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L10_D192_N64_HD32_G1: t2k=10.52285ms tracks/s=190063 CV=0.721% params=5.539M [v5pc]
+
+[arch] === 35/39  L8_D256_N32_HD32_G1 (nheads=16, d_inner=512) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 7.373 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L8_D256_N32_HD32_G1: t2k=10.04368ms tracks/s=199130 CV=0.591% params=7.3731M [v5pc]
+
+[arch] === 36/39  L6_D192_N64_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 3.382 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L6_D192_N64_HD32_G1: t2k=6.49719ms tracks/s=307826 CV=0.587% params=3.3816M [v5pc]
+
+[arch] === 37/39  L12_D128_N64_HD32_G1 (nheads=8, d_inner=256) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 3.150 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L12_D128_N64_HD32_G1: t2k=7.41729ms tracks/s=269640 CV=0.304% params=3.1503M [v5pc]
+
+[arch] === 38/39  L4_D384_N64_HD32_G1 (nheads=24, d_inner=768) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 8.401 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L4_D384_N64_HD32_G1: t2k=9.03091ms tracks/s=221462 CV=0.504% params=8.4006M [v5pc]
+
+[arch] === 39/39  L8_D192_N32_HD32_G1 (nheads=12, d_inner=384) ===
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 4.259 M   weights: RANDOM INIT
+[bench] warmup 25/50
+[bench] warmup 50/50
+[bench] iter 25/300
+[bench] iter 50/300
+[bench] iter 75/300
+[bench] iter 100/300
+[bench] iter 125/300
+[bench] iter 150/300
+[bench] iter 175/300
+[bench] iter 200/300
+[bench] iter 225/300
+[bench] iter 250/300
+[bench] iter 275/300
+[bench] iter 300/300
+[arch] RESULT L8_D192_N32_HD32_G1: t2k=7.69008ms tracks/s=260075 CV=0.594% params=4.2586M [v5pc]
+
+[arch] sweep complete -> docs/perf/results/night_arch/arch_sweep.jsonl
