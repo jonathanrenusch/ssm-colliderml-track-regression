@@ -1,0 +1,18 @@
+# Keep the Docker build context small and free of checkpoints/logs.
+# The rtx_infer image only needs src/ and docker/rtx_infer/.
+.git
+.pixi
+logs
+docs
+scripts
+tests
+media
+*.ckpt
+*.nsys-rep
+*.ncu-rep
+*.log
+__pycache__
+**/__pycache__
+*.pyc
+.vscode
+.idea
