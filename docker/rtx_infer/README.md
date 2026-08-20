@@ -67,6 +67,17 @@ VRAM is small — strict fp32, measured on-device: **4L ≈ 0.1 GiB per 1k track
 headroom; start around `BATCH_SIZE=16384–32768` and raise it. If you hit an OOM
 the script exits with a clear message — just lower `BATCH_SIZE`.
 
+## What it times
+
+The headline throughput is **raw GPU compute only**: the preloaded batches are
+staged onto the GPU once, then the timed loop runs `model(...)` on the resident
+data. Disk, collate, and the host→device (H2D) copy are **outside** the timer —
+the data pipeline is a separate deployment concern. The H2D copy is *measured*
+and printed as a reference line (typically ~1% of compute for the 4L, well under
+1% for the 10L), so you can see it's negligible without it inflating the number.
+This matches the `bench_variant.py --mode staged` methodology used elsewhere in
+the repo (cross-checked to <0.2%).
+
 ## Example output
 
 ```
@@ -79,10 +90,11 @@ the script exits with a clear message — just lower `BATCH_SIZE`.
   matmul precision      : highest (strict fp32)
   batch size            : 16384
 --------------------------------------------------------------
-  per-batch ms  mean    : ...
-  throughput            : ... tracks/s  (wall-clock, RAM-preloaded)
+  per-batch ms  mean    : ...   (RAW GPU COMPUTE, H2D excluded)
+  throughput            : ... tracks/s  (compute only)
   t2k (2000 x per-track): ... ms
   peak VRAM             : ... GiB
+  -- reference: H2D copy/batch ... ms (...% of compute)
 ==============================================================
 ```
 
@@ -133,3 +145,23 @@ rough shape; your full RTX 5000 Ada will differ:
 
 (CV < 0.3% across 100 timed batches. On a full card and/or `MATMUL_PRECISION=high`
 these rise substantially.)
+
+### L40S reference (Ada sm_89 — same architecture as the RTX 5000 Ada)
+
+Compute-only (H2D excluded), batch 32768, warmup 20, CV ~0.15%. The L40S is a
+bigger Ada chip than the RTX 5000 Ada (142 SMs / 48 GB vs ~100 SMs / 32 GB), so
+treat these as an upper bound for the RTX; the **fp32-vs-TF32 ratio transfers
+directly**:
+
+| model | precision | tracks/s | t2k | H2D (measured) |
+|-------|-----------|---------:|----:|---------------:|
+| 4L  | fp32 (highest) | 347,800 | 5.75 ms | 0.98 ms (1.0% of compute) |
+| 4L  | TF32 (high)    | 348,700 | 5.74 ms | — |
+| 10L | fp32 (highest) |  81,000 | 24.70 ms | 0.98 ms (0.24%) |
+| 10L | TF32 (high)    |  93,300 | 21.44 ms | — |
+
+Takeaways: strict fp32 is **free on the 4L** (~0.3% vs TF32) and costs **~15% on
+the 10L** (bigger projections); H2D is ~1% either way. Cross-checked against
+`bench_variant.py --mode staged` (agrees to <0.2%). For context, a full H100 NVL
+runs the 4L at ~2.2 ms t2k — the ~2.6× gap is the card (HBM3 bandwidth + more
+SMs), not the kernel.
