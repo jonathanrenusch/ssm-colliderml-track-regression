@@ -106,58 +106,52 @@ Minimum to run anything: 1× GPU with ≥40 GB VRAM, 16 GB system RAM,
     └── 03_paper_plots.sh
 ```
 
+## Fast short-sequence SSM kernels (on by default)
 
-## Fast short-sequence kernels (GPU-optimization campaign)
+Tracks are at most **22 tokens** (≤20 hits + 2 CLS). The stock `mamba_ssm`
+chunked selective scan is built for sequences of thousands of tokens, so at this
+length it is almost pure launch/bookkeeping overhead and hits an indexing ceiling
+(~60–70k tokens per call). This repo replaces the *evaluation* of the Mamba2
+update — never the math — with the algebraically identical **single-chunk SSD
+quadratic dual**: one dense `L×L` (≤22×22) decay-weighted product per track.
+Embarrassingly parallel, no chunk machinery, no batch ceiling.
 
-The stock `mamba_ssm` chunked scan is built for sequences of thousands of
-tokens; our tracks have at most 22 (20 hits + 2 CLS). The campaign on branch
-`opt_kernel` replaces its evaluation with the algebraically identical
-single-chunk SSD quadratic dual — one dense 22x22 lower-triangular product
-per track, embarrassingly parallel, no chunk machinery and no batch ceiling.
-Full record: `docs/perf/OPTIMIZATION_LOG.md`; campaign context: `CLAUDE.md`.
+Two drop-in implementations, both checkpoint-compatible (identical parameter
+names/shapes — a `state_dict` loads unchanged):
 
-**Defaults (no action needed):** every SSM-CLS config now ships a
-`KernelSwapCallback(variant="auto")` in its base callbacks —
-- while **training**, the encoder runs the compiled pure-PyTorch quadratic
-  dual (`v3c`): exact autograd, ~1.6-2.5x faster training steps;
-- in **validation / test / predict**, it runs the fused Triton packed
-  kernels (`v5pc`): ~5x inference throughput (0.18 -> 0.91 M tracks/s on
-  H100, t2k 11.1 -> 2.2 ms) and a batch ceiling of 600K+ tracks per call.
-Remove the callback entry from the config to run the stock kernels (`v0`).
+| Impl | File | Use |
+|------|------|-----|
+| Pure-PyTorch quadratic dual (`torch.compile`-friendly, exact autograd) | `src/track_regression/mamba_short.py` (`Mamba2Short`) | training **and** inference |
+| Fused portable Triton kernels (no Hopper-only features) | `src/track_regression/ops/ssd_short_triton.py` | inference |
 
-Every variant is checkpoint-compatible (identical parameter names) and
-passes a correctness-oracle chain (`tests/test_mamba2short.py`: fp64
-algebra, stock-kernel parity, end-to-end golden vs the trained checkpoint,
-<=1% physics-drift gate on 131k tracks, gradient parity). Notable: by fp64
-referee the new path is ~50x closer to the exact math than the stock
-kernel, whose internal TF32 matmuls it replaces with strict IEEE fp32.
+**On by default.** Every SSM-CLS config ships a
+`KernelSwapCallback(variant: auto)` in its callbacks: while **training** the
+encoder runs the compiled pure-PyTorch dual (`v3c`, exact gradients, ~1.6–2.5×
+faster steps); in **validation / test / predict** it runs the fused Triton packed
+kernels (`v5pc`, ~5× inference throughput, batch ceiling lifted to 600k+ tracks
+per call). No action needed — to fall back to the stock kernel, remove the
+callback (or set `variant: v0`).
 
-**Precision (important):** training scripts historically set
-`torch.set_float32_matmul_precision("high")` = TF32 GEMMs (10 mantissa
-bits). `train.py` now honours `TRK_MATMUL_PRECISION`; **new trainings must
-run with `TRK_MATMUL_PRECISION=highest`** (full IEEE fp32 everywhere —
-fp64-referee showed TF32 gradients carry ~50% relative error on this
-model). The default stays "high" only for numerics-compatibility when
-fine-tuning historical checkpoints.
+Ad-hoc selection in code (e.g. for a script or notebook):
 
-Ad-hoc benchmarking / variant selection:
-
-```bash
-# throughput of any variant (v0|v2p|v3|v3c|v4|v5|v5p|v5pc|auto)
-pixi run -e default python scripts/perf/bench_variant.py \
-    --config src/track_regression/config/experimental/scaling/finetune_ssm_cls_4L_muon.yaml \
-    --ckpt <ckpt.ckpt> --variant v5pc --mode staged --batch-size 32768
-
-# physics-drift gate (<=1% clipped-RMS per parameter, 131k-track subset)
-pixi run -e default python scripts/perf/physics_drift.py --variant v5pc ...
-
-# in code:
+```python
 from track_regression.mamba_short import apply_variant
-apply_variant(model, "v5pc")   # or "auto", "v3c", ...
+apply_variant(model, "v5pc")   # fused Triton, packed — fastest inference
+apply_variant(model, "v3c")    # compiled pure-PyTorch — training / portable
+apply_variant(model, "v0")     # no-op: stock chunked kernel (reference)
 ```
 
-The kernels are plain portable Triton (no Hopper-only features) and
-re-autotune on RTX-class GPUs (deployment target: RTX 5000 Ada / 3090).
+**Correctness & precision.** Every variant is gated by an fp64-anchored oracle
+chain in `tests/test_mamba2short.py` (pure-algebra vs an independent fp64
+reference, stock-kernel parity, full-encoder parity vs the packed stock path,
+fp64 gradcheck, fused-Triton-vs-PyTorch equality). The new path runs **strict
+IEEE fp32** internally; new trainings should export `TRK_MATMUL_PRECISION=highest`
+(full fp32 in the projection GEMMs too). Kernel shape constraints: `d_state` a
+power of 2 (≥16), `ngroups=1`.
+
+```bash
+pixi run -e default pytest tests/test_mamba2short.py -v   # requires a GPU
+```
 
 ## Quickstart
 

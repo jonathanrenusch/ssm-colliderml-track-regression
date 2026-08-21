@@ -1,6 +1,6 @@
 """Correctness-oracle chain for the short-sequence SSD kernel campaign.
 
-Chain (see docs/perf/OPTIMIZATION_LOG.md and CLAUDE.md):
+Chain:
 
 - O1  stock-kernel vs fp64 reference  -> measures the stock TF32 noise floor
 - O2  Mamba2Short fp64 vs independent fp64 reference -> pure-algebra check
@@ -8,15 +8,14 @@ Chain (see docs/perf/OPTIMIZATION_LOG.md and CLAUDE.md):
 - O4  V2' padded-static on the STOCK kernel vs packed stock (parity bridge)
 - O5  state-dict key compatibility (strict load)
 - O6  full encoder V3 (Mamba2Short, static path) vs packed stock
-- O7  end-to-end golden vs captured artifact (skipped until capture exists)
 - O8  fp64 gradcheck of Mamba2Short
+- O9  fused Triton kernel vs pure-torch quadratic dual (both IEEE fp32)
 - O10 CLS grad-flow + track-order invariance on the static path
 """
 
 from __future__ import annotations
 
 import copy
-import pathlib
 
 import pytest
 import torch
@@ -246,29 +245,6 @@ class TestStateDict:
         enc_mut.load_state_dict(sd, strict=True)
         for k, v in enc_mut.state_dict().items():
             assert torch.equal(v.cpu(), sd[k].cpu()), k
-
-
-# ---------------------------------------------------------------------------
-# O7 — end-to-end golden (activated once scripts/capture_golden.py has run)
-# ---------------------------------------------------------------------------
-
-_GOLDEN = pathlib.Path(__file__).resolve().parents[1] / "docs/perf/results/golden/golden_small.pt"
-
-
-class TestGolden:
-    @_REQUIRES_MAMBA_GPU
-    @pytest.mark.skipif(not _GOLDEN.exists(), reason="golden artifact not captured yet")
-    @pytest.mark.parametrize("variant", ["v2p", "v3"])
-    def test_o7_end_to_end_golden(self, variant):
-        import importlib.util
-
-        cg_path = _GOLDEN.parents[4] / "scripts/capture_golden.py"
-        spec = importlib.util.spec_from_file_location("capture_golden", cg_path)
-        cg = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cg)
-
-        report = cg.check_variant_against_golden(_GOLDEN, variant)
-        assert report["pass"], report
 
 
 # ---------------------------------------------------------------------------

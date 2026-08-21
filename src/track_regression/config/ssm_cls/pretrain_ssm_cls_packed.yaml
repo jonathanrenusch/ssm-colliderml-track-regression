@@ -42,6 +42,9 @@ trainer:
   # gradient logging in GradientLoggerCallback. All other callbacks copied
   # verbatim from scaling/base.yaml.
   callbacks:
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto   # v3c (compiled pure-torch) in train, v5pc (fused Triton) in eval
     - class_path: track_regression._lib.callbacks.InferenceTimer
     - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:

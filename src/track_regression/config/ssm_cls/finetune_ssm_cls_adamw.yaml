@@ -43,6 +43,9 @@ trainer:
   # patience is reduced from the base's 50 to 30 to match the fine-tune
   # convention.
   callbacks:
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto   # v3c (compiled pure-torch) in train, v5pc (fused Triton) in eval
     - class_path: track_regression._lib.callbacks.InferenceTimer
     - class_path: track_regression._lib.callbacks.GradientLoggerCallback
       init_args:

@@ -35,3 +35,8 @@ docs/perf/results/golden/
 docs/perf/results/physics_subset.pt
 *.nsys-rep
 *.ncu-rep
+# Profiling / benchmark artifacts (regenerable; live on the R&D branch)
+*.nsys-rep
+*.ncu-rep
+docs/perf/profiles/
+docs/perf/results/
