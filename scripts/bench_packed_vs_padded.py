@@ -41,6 +41,12 @@ from track_regression.mamba_cls import BidirectionalMambaCLSEncoder  # noqa: E40
 from track_regression.losses import TrackParameterLoss  # noqa: E402
 from track_regression.model import TrackParameterRegressor  # noqa: E402
 
+# Kernel-campaign variants measurable in a training step (fwd+bwd).
+# v0 is a no-op reference; the others switch the encoder onto the
+# padded-static path FED FROM PACKED INPUTS (mamba_short.apply_variant),
+# so with --variant set only the packed path is measured.
+TRAIN_VARIANTS = ("v0", "v3", "v3c", "v5")
+
 
 def synth_batch(batch_size: int, rng: np.random.Generator, feat_dim: int = 12) -> list[dict]:
     """Produce a list of (variable-length) synthetic tracks matching the
@@ -93,7 +99,9 @@ def build_model(num_layers: int, dim: int, d_state: int) -> TrackParameterRegres
         output_head_hidden_layers=[256], output_head_dropout=0.0,
         output_head_activation="SiLU", input_net_hidden_layers=[192],
         input_net_dropout=0.0, input_net_activation="SiLU",
-        sort_field="s",
+        # NOTE: sort_field="s" was passed here originally; the kwarg was
+        # removed from TrackParameterRegressor (post-May API) — dropped to
+        # keep this script runnable on the current codebase.
         fourier_scales=[-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5], fourier_base=2,
         norm_min=[-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3],
         norm_max=[1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3],
@@ -189,6 +197,58 @@ def time_one_path(
     }
 
 
+def _emit_jsonl_row(args, *, path: str, result: dict | None, error: str) -> None:
+    """Append one campaign-schema row to --out-jsonl (perf-results sink).
+
+    Uses scripts/perf/common.py for the sink + env/precision fingerprints.
+    Variant is suffixed with ``+train`` so nightly KPI tables (report.py
+    groups purely by variant) never mix fwd+bwd training-step rows with
+    inference rows of the same variant.
+    """
+    perf_dir = os.path.join(HERE, "perf")
+    if perf_dir not in sys.path:
+        sys.path.insert(0, perf_dir)
+    import common  # scripts/perf/common.py
+
+    row: dict = {
+        "ts": common.utc_ts(),
+        "job_id": args.job_id,
+        "tag": "train_step",
+        "variant": f"{args.variant or 'v0'}+train",
+        "mode": "train_step",
+        "path": path,
+        "batch_tracks": args.batch_size,
+        "num_layers": args.num_layers,
+        "dim": args.dim,
+        "d_state": args.d_state,
+        "warmup": args.warmup,
+        "timed_iters": args.iters,
+        "precision_flags": common.pin_precision_flags(),
+        "env": common.env_fingerprint(),
+    }
+    if result is not None:
+        step_ms = result["step_ms"]["med"]
+        tracks_per_s = args.batch_size / (step_ms / 1e3)
+        row.update({
+            "batch_tokens": result["real_hits_per_batch_med"],
+            "collate_ms_med": round(result["collate_ms"]["med"], 4),
+            "fwd_ms_med": round(result["fwd_ms"]["med"], 4),
+            "bwd_ms_med": round(result["bwd_ms"]["med"], 4),
+            "t_iter_ms_mean": round(step_ms, 4),  # median step incl. collate+H2D
+            "t_iter_ms_p10": round(result["step_ms"]["p10"], 4),
+            "t_iter_ms_p90": round(result["step_ms"]["p90"], 4),
+            "tracks_per_s": round(tracks_per_s, 1),
+            "tokens_per_s": round(result["real_tokens_per_sec_med"], 1),
+            "t2k_ms": round(2000.0 * 1000.0 / tracks_per_s, 4),
+            "vram_gib_torch_peak": round(result["peak_alloc_MiB"] / 1024.0, 3),
+            "status": "ok",
+            "error": "",
+        })
+    else:
+        row.update({"status": "error", "error": error})
+    common.append_jsonl(args.out_jsonl, row)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-size", type=int, default=2048)
@@ -199,10 +259,23 @@ def main():
     ap.add_argument("--iters", type=int, default=500)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out-json", type=str, default="")
+    ap.add_argument("--variant", choices=TRAIN_VARIANTS, default=None,
+                    help="apply track_regression.mamba_short.apply_variant(model, V) "
+                         "after building the model (v0 = no-op). apply_variant "
+                         "reroutes the encoder onto the padded-static path fed "
+                         "from PACKED inputs, so when this flag is set only the "
+                         "packed path is measured. Default (flag absent): "
+                         "original packed-vs-padded behavior, unchanged.")
+    ap.add_argument("--out-jsonl", type=str, default="",
+                    help="append one result row per measured path to this JSONL "
+                         "(perf-campaign sink, schema ~ scripts/perf/bench_variant.py)")
+    ap.add_argument("--job-id", type=str, default="adhoc_train_step")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
-    torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision(__import__("os").environ.get("TRK_MATMUL_PRECISION", "highest"))
+    if __import__("os").environ.get("TRK_MATMUL_PRECISION", "highest") == "highest":
+        torch.backends.cuda.matmul.allow_tf32 = False; torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True
 
     if not torch.cuda.is_available():
@@ -211,15 +284,35 @@ def main():
     print(f"# device: {torch.cuda.get_device_name(device)}  capability={torch.cuda.get_device_capability(device)}")
 
     results = []
-    for packed in (False, True):
+    # --variant switches the encoder onto the padded-static path fed from
+    # packed inputs → only the packed path is meaningful/measured then.
+    paths = (True,) if args.variant else (False, True)
+    for packed in paths:
         # Fresh model per path so optimizer-state / autograd graph doesn't bias.
         model = build_model(args.num_layers, args.dim, args.d_state).to(device)
+        if args.variant:
+            from track_regression.mamba_short import apply_variant
+            model = apply_variant(model, args.variant) or model
+            print(f"# variant: {args.variant} applied (packed path only)")
         # No optimizer — we're measuring the encoder + heads only. Backward
         # without optimizer.step() is the standard fwd+bwd compute cost.
-        r = time_one_path(model=model, packed=packed,
-                          batch_size=args.batch_size, warmup=args.warmup,
-                          iters=args.iters, seed=args.seed)
+        try:
+            r = time_one_path(model=model, packed=packed,
+                              batch_size=args.batch_size, warmup=args.warmup,
+                              iters=args.iters, seed=args.seed)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(tb, file=sys.stderr, flush=True)
+            if args.out_jsonl:
+                _emit_jsonl_row(args, path="packed" if packed else "padded",
+                                result=None, error=f"{type(e).__name__}: {e}")
+            sys.exit(4)
+        if args.variant:
+            r["variant"] = args.variant
         results.append(r)
+        if args.out_jsonl:
+            _emit_jsonl_row(args, path=r["path"], result=r, error="")
         del model
         torch.cuda.empty_cache()
 

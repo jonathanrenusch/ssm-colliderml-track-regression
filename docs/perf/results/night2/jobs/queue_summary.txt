@@ -1,0 +1,23 @@
+[queue] 2026-07-08T15:14:17Z START train_v0_bs2048
+[queue] 2026-07-08T15:15:04Z END   train_v0_bs2048 rc=0
+[queue] 2026-07-08T15:15:04Z START train_v3_bs2048
+[queue] 2026-07-08T15:15:31Z END   train_v3_bs2048 rc=0
+[queue] 2026-07-08T15:15:31Z START train_v3c_bs2048
+[queue] 2026-07-08T15:16:15Z END   train_v3c_bs2048 rc=0
+[queue] 2026-07-08T15:16:15Z START train_v0_bs22000
+[queue] 2026-07-08T15:18:11Z END   train_v0_bs22000 rc=0
+[queue] 2026-07-08T15:18:11Z START train_v3_bs22000
+[queue] 2026-07-08T15:19:34Z END   train_v3_bs22000 rc=0
+[queue] 2026-07-08T15:19:34Z START train_v3c_bs22000
+[queue] 2026-07-08T15:20:56Z END   train_v3c_bs22000 rc=0
+[queue] 2026-07-08T15:20:56Z START ssmstate_v0_staged_22000
+[queue] 2026-07-08T15:21:57Z END   ssmstate_v0_staged_22000 rc=0
+[queue] 2026-07-08T15:21:57Z START ssmstate_v0_sweep
+[queue] 2026-07-08T15:23:00Z END   ssmstate_v0_sweep rc=0
+[queue] 2026-07-08T15:23:00Z START v5_e2e_131072
+[queue] 2026-07-08T15:23:34Z END   v5_e2e_131072 rc=0
+[queue] 2026-07-08T15:23:34Z START v5_staged_131072
+[queue] 2026-07-08T15:24:24Z END   v5_staged_131072 rc=0
+[queue] 2026-07-08T15:24:24Z START v5_staged_power_32768
+[queue] 2026-07-08T15:25:09Z END   v5_staged_power_32768 rc=0
+[queue] 2026-07-08T15:25:09Z ALL DONE

@@ -29,6 +29,12 @@ out/
 .idea/
 *.swp
 
+# kernel-campaign bulky artifacts (regenerable; record lives in the JSONL/CSV/log)
+docs/perf/profiles/
+docs/perf/results/golden/
+docs/perf/results/physics_subset.pt
+*.nsys-rep
+*.ncu-rep
 # Profiling / benchmark artifacts (regenerable; live on the R&D branch)
 *.nsys-rep
 *.ncu-rep

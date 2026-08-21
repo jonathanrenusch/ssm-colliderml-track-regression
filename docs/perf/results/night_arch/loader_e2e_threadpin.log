@@ -1,0 +1,66 @@
+[loader-opt] env: {'git_sha': '1347e37f3901f7ebfeaabe88d62df612b8d46ed9', 'torch': '2.9.1+cu128', 'triton': '3.5.1', 'mamba_ssm': '2.3.0', 'gpu_name': 'NVIDIA H100 NVL', 'hostname': 'sess3', 'cuda_visible_devices': '1'}
+[common] data-path override: '/scratch/colliderml/arxiv_retraining/p200_core_kf_hits_finetune' -> '/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune'
+
+===== e2e grid (pin=True, async overlap) =====
+
+===== PART 2 · true end-to-end wall-clock (loader + H2D + v5pc) =====
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.028 M   weights: RANDOM INIT
+[bench] warmup 25/40
+[bench] iter 25/200
+[bench] iter 50/200
+[bench] iter 75/200
+[bench] iter 100/200
+[bench] iter 125/200
+[bench] iter 150/200
+[bench] iter 175/200
+[bench] iter 200/200
+compute-only @batch32768: 36.909 ms/batch -> 887,795 tracks/s
+end-to-end wall-clock: 7,547,408 tracks in 12.0s -> 626,937 tracks/s
+loader standalone (best): 944,037 tracks/s
+
+>>> end-to-end = 71% of compute-only (still input-bound)
+[grid] workers=24 prefetch=8: e2e 626,937 (70.6% of compute)
+
+
+===== PART 2 · true end-to-end wall-clock (loader + H2D + v5pc) =====
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.028 M   weights: RANDOM INIT
+[bench] warmup 25/40
+[bench] iter 25/200
+[bench] iter 50/200
+[bench] iter 75/200
+[bench] iter 100/200
+[bench] iter 125/200
+[bench] iter 150/200
+[bench] iter 175/200
+[bench] iter 200/200
+compute-only @batch32768: 37.513 ms/batch -> 873,503 tracks/s
+end-to-end wall-clock: 6,859,280 tracks in 12.1s -> 568,249 tracks/s
+loader standalone (best): 1,064,010 tracks/s
+
+>>> end-to-end = 65% of compute-only (still input-bound)
+[grid] workers=32 prefetch=8: e2e 568,249 (65.1% of compute)
+
+
+===== PART 2 · true end-to-end wall-clock (loader + H2D + v5pc) =====
+[bench] --random-weights: skipping checkpoint load (random init; timing-only, NOT physics-valid)
+[bench] params: 1.028 M   weights: RANDOM INIT
+[bench] warmup 25/40
+[bench] iter 25/200
+[bench] iter 50/200
+[bench] iter 75/200
+[bench] iter 100/200
+[bench] iter 125/200
+[bench] iter 150/200
+[bench] iter 175/200
+[bench] iter 200/200
+compute-only @batch32768: 37.491 ms/batch -> 874,019 tracks/s
+end-to-end wall-clock: 6,722,824 tracks in 12.0s -> 558,149 tracks/s
+loader standalone (best): 780,737 tracks/s
+
+>>> end-to-end = 64% of compute-only (still input-bound)
+[grid] workers=48 prefetch=8: e2e 558,149 (63.9% of compute)
+
+
+[loader-opt] BEST E2E: {'batch': 32768, 'workers': 24, 'pin': True, 'prefetch': 8, 'loader_tps': 944037, 'compute_tps': 887795, 'e2e_tps': 626937, 'pct_of_compute': 70.6}

@@ -1,0 +1,164 @@
+# Inference preset (model architecture only) extracted from the trained
+# run config. No trainer/optimizer/data paths -- bench_infer.py takes
+# --data-dir/--ckpt/--batch-size separately. Loads its matching checkpoint.
+model:
+  model:
+    class_path: track_regression.model.TrackParameterRegressor
+    init_args:
+      input_dim: 12
+      dim: 192
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -2.5
+              norm_max: 2.5
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -200.0
+              norm_max: 200.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            qop:
+              type: quantile
+              weight: 1.0
+              norm_min: -2.0
+              norm_max: 2.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+          parameter_order:
+          - d0
+          - z0
+          - phi
+          - theta
+          - qop
+          qop_tail_weight: 0.0
+          qop_scale: 2.0
+          loss_aggregation: sum
+      pool: ssm_cls
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
+      state_head_dropout: 0.0
+      state_head_activation: SiLU
+      output_head_hidden_layers:
+      - 256
+      output_head_dropout: 0.0
+      output_head_activation: SiLU
+      input_net_hidden_layers:
+      - 192
+      input_net_dropout: 0.0
+      input_net_activation: SiLU
+      input_fields:
+      - x
+      - y
+      - z
+      - r
+      - phi_hit
+      - theta_hit
+      - s
+      - volume_id
+      - layer_id
+      - surface_id
+      - detector
+      - eta_hit
+      sort_field: s
+      fourier_scales:
+      - -5
+      - -4
+      - -3
+      - -2
+      - -1
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      fourier_base: 2
+      norm_min:
+      - -1031.0
+      - -1031.0
+      - -3026.0
+      - 31.0
+      - -3.1416
+      - 0.027
+      - 31.0
+      - 16.0
+      - 2.0
+      - 1.0
+      - 0.0
+      - -4.3
+      norm_max:
+      - 1031.0
+      - 1031.0
+      - 3026.0
+      - 1032.0
+      - 3.1416
+      - 3.114
+      - 3185.0
+      - 30.0
+      - 16.0
+      - 3360.0
+      - 8.0
+      - 4.3
+      encoder_autocast_dtype: float32
+      output_head_init_scale: 0.01
+      separate_d0_head: false
+      d0_grad_scale: 1.0
+      disable_main_pool_head: false

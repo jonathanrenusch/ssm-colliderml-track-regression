@@ -1,0 +1,48 @@
+{
+  "args": {
+    "batch_size": 22000,
+    "num_layers": 4,
+    "dim": 128,
+    "d_state": 16,
+    "warmup": 40,
+    "iters": 100,
+    "seed": 42,
+    "out_json": "docs/perf/results/night2/jobs/train_v3c_bs22000.json",
+    "variant": "v3c",
+    "out_jsonl": "docs/perf/results/night2/results.jsonl",
+    "job_id": "train_v3c_bs22000"
+  },
+  "results": [
+    {
+      "path": "packed",
+      "batch_size": 22000,
+      "iters": 100,
+      "collate_ms": {
+        "med": 75.26706997305155,
+        "p10": 74.6399235446006,
+        "p90": 76.97957009077072
+      },
+      "fwd_ms": {
+        "med": 38.91708375886083,
+        "p10": 38.81133934482932,
+        "p90": 39.09227498807013
+      },
+      "bwd_ms": {
+        "med": 108.52083540521562,
+        "p10": 106.1007484793663,
+        "p90": 109.71822296269238
+      },
+      "step_ms": {
+        "med": 222.9862583335489,
+        "p10": 220.72259564884007,
+        "p90": 224.60725056007504
+      },
+      "real_hits_per_batch_med": 275878,
+      "padded_hits_per_batch_med": 275878,
+      "samples_per_sec_med": 98660.78817777104,
+      "real_tokens_per_sec_med": 1237197.3145866871,
+      "peak_alloc_MiB": 42415.1826171875,
+      "variant": "v3c"
+    }
+  ]
+}
