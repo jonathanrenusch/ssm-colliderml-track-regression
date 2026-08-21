@@ -226,6 +226,14 @@ def main() -> None:
     os.environ.setdefault("TRK_MATMUL_PRECISION", args.matmul_precision)
     import torch
     torch.set_float32_matmul_precision(args.matmul_precision)
+    if args.matmul_precision == "highest":
+        # Full IEEE fp32 EVERYWHERE: also forbid TF32 in cuBLAS matmul and cuDNN
+        # convolutions (separate switches from set_float32_matmul_precision). The
+        # v5pc path does conv/scan/norm inside the fp32 Triton kernel already, so
+        # this only matters for any fallback (e.g. F.conv1d/cuDNN in v3/stock) --
+        # belt-and-suspenders so nothing in the graph silently runs TF32.
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     if not torch.cuda.is_available():
         sys.exit("[bench] no CUDA device visible")
     dev = args.device
