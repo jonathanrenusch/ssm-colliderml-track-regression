@@ -1,4 +1,0 @@
-id,kernel,dram_pct,duration_us,sm_pct,occupancy_pct
-0,_ssd_short_fwd_kernel,475.81,5.75,50.25,30.65
-1,_ssd_short_fwd_kernel,475.85,5.75,50.24,30.64
-2,_ssd_short_fwd_kernel,475.86,5.75,50.24,30.65
