@@ -223,15 +223,20 @@ def atomic_write_json(path: Path | str, obj: Any) -> None:
 # ---------------------------------------------------------------------------
 
 def pin_precision_flags() -> dict:
-    """Pin production numerics and return all precision-relevant flags.
+    """Pin numerics and return all precision-relevant flags.
 
-    ``train.py:26`` sets ``torch.set_float32_matmul_precision("high")`` →
-    production numerics include TF32 linears (scan internals fp32). Benches
-    must run under the same flags and record them alongside every result.
+    DEFAULT: full IEEE fp32 ("highest") everywhere, matching the repo-wide
+    default set in ``train.py``. Override with ``TRK_MATMUL_PRECISION=high`` to
+    reproduce the old TF32-linears numbers. Benches record the flags per result.
     """
+    import os
     import torch
 
-    torch.set_float32_matmul_precision("high")
+    prec = os.environ.get("TRK_MATMUL_PRECISION", "highest")
+    torch.set_float32_matmul_precision(prec)
+    if prec == "highest":
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
 
     flags: dict[str, Any] = {
         "float32_matmul_precision": torch.get_float32_matmul_precision(),

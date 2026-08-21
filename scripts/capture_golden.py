@@ -64,10 +64,13 @@ def _git_sha() -> str:
 
 
 def build_model_and_batch(
-    config: Path, ckpt: Path, n_tracks: int, precision: str = "high"
+    config: Path, ckpt: Path, n_tracks: int, precision: str = "highest"
 ) -> tuple[torch.nn.Module, tuple]:
     """Instantiate TrackParameterRegressor + one deterministic packed batch."""
-    torch.set_float32_matmul_precision(precision)  # "high" = production numerics
+    torch.set_float32_matmul_precision(precision)  # "highest" = full fp32 (repo default)
+    if precision == "highest":
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     cfg = _bti._load_merged_config(config.resolve())
 
     model = _bti._instantiate(cfg["model"]["model"])

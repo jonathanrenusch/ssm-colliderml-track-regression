@@ -273,7 +273,9 @@ def main():
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
-    torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision(__import__("os").environ.get("TRK_MATMUL_PRECISION", "highest"))
+    if __import__("os").environ.get("TRK_MATMUL_PRECISION", "highest") == "highest":
+        torch.backends.cuda.matmul.allow_tf32 = False; torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True
 
     if not torch.cuda.is_available():

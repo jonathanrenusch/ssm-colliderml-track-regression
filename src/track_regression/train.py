@@ -23,18 +23,23 @@ warnings.filterwarnings("ignore", message=".*barrier.*device under current conte
 
 import torch
 
-# fp32 matmul precision. "high" (historical default) lets cuBLAS use TF32
-# tensor cores: only 10 mantissa bits (~3 decimal digits) INSIDE every
-# nn.Linear GEMM — and, for the pure-torch quadratic-dual kernel path, inside
-# the scan matmuls too. This regression problem needs the 5th decimal place,
-# so the kernel-campaign pretrains run with TRK_MATMUL_PRECISION=highest
-# (full IEEE fp32, 23 mantissa bits, everywhere). The default stays "high"
-# only so that fine-tunes of checkpoints TRAINED under "high" keep their
-# historical numerics; new trainings should export TRK_MATMUL_PRECISION=highest.
+# fp32 matmul precision. DEFAULT: "highest" = full IEEE fp32 (23 mantissa bits)
+# EVERYWHERE — every nn.Linear GEMM (in_proj/out_proj, input net, output head)
+# and, on the pure-torch path, the scan matmuls too. This regression problem
+# needs the 5th decimal place, so full fp32 is the repo-wide default (measured
+# cost: ~free on the 4L, ~15% on the 10L; no mixed-precision bottleneck between
+# the fp32 kernel and the linears). Set TRK_MATMUL_PRECISION=high to opt back
+# into TF32 GEMMs (10 mantissa bits) — e.g. to reproduce a checkpoint trained
+# under the old "high" numerics, or to trade precision for speed on the 10L.
 import os as _os
 
-_MATMUL_PRECISION = _os.environ.get("TRK_MATMUL_PRECISION", "high")
+_MATMUL_PRECISION = _os.environ.get("TRK_MATMUL_PRECISION", "highest")
 torch.set_float32_matmul_precision(_MATMUL_PRECISION)
+if _MATMUL_PRECISION == "highest":
+    # Also forbid TF32 in cuBLAS matmul and cuDNN conv (separate switches), so
+    # full fp32 holds across the whole graph incl. any cuDNN/F.conv1d fallback.
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 print(f"[train] float32_matmul_precision = {_MATMUL_PRECISION!r}"
       + (" (TF32 GEMMs!)" if _MATMUL_PRECISION == "high" else " (full IEEE fp32)"),
       flush=True)
