@@ -33,9 +33,7 @@ SRC = (HERE.parent / "src").resolve()
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-torch.set_float32_matmul_precision(__import__("os").environ.get("TRK_MATMUL_PRECISION", "highest"))
-if __import__("os").environ.get("TRK_MATMUL_PRECISION", "highest") == "highest":
-    torch.backends.cuda.matmul.allow_tf32 = False; torch.backends.cudnn.allow_tf32 = False
+torch.set_float32_matmul_precision("high")
 
 from track_regression._lib.cuda_timer import cuda_timer
 from track_regression.data import ColliderMLRegrDataModule
