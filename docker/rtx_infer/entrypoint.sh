@@ -34,6 +34,6 @@ exec python /workspace/docker/rtx_infer/bench_infer.py \
   --warmup "${WARMUP:-20}" \
   --iters "${ITERS:-200}" \
   --variant "${VARIANT:-v5pc}" \
-  --matmul-precision "${MATMUL_PRECISION:-highest}" \
+  --matmul-precision "${MATMUL_PRECISION:-high}" \
   --loader-workers "${LOADER_WORKERS:-8}" \
   "$@"

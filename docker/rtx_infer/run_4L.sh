@@ -17,5 +17,5 @@ docker run --gpus all --ipc=host --rm \
   -e CKPT="/ckpts/$(basename "$CKPT")" \
   -e DATA_DIR=/data \
   -e BATCH_SIZE="$BATCH" \
-  -e MATMUL_PRECISION="${MATMUL_PRECISION:-highest}" \
+  -e MATMUL_PRECISION="${MATMUL_PRECISION:-high}" \
   "${IMAGE:-ssm-rtx-infer}" "$@"
