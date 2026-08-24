@@ -56,6 +56,33 @@ except ImportError:
     Mamba2 = nn.Module  # type: ignore[assignment, misc]
 
 
+def _build_mamba(mamba_kwargs: dict, mamba_impl: str = "stock", with_state: bool = False):
+    """Construct one per-direction SSM block.
+
+    ``mamba_impl="short"`` builds the native ``Mamba2Short`` kernel directly, so
+    the model imports and runs with ONLY torch — no ``mamba_ssm`` / ``causal_conv1d``
+    (which need nvcc to compile). ``"stock"`` builds ``mamba_ssm.Mamba2``.
+    Parameter names/shapes are identical, so a checkpoint loads into either
+    unchanged, and ``mamba_short.apply_variant`` can still enable the fused
+    Triton path (v5pc) on natively-built layers.
+    """
+    if mamba_impl == "short":
+        from track_regression.mamba_short import Mamba2Short  # lazy: avoids circular import
+        if with_state:
+            from track_regression.mamba_short import Mamba2ShortWithState
+            return Mamba2ShortWithState(**mamba_kwargs)
+        return Mamba2Short(**mamba_kwargs)
+    if mamba_impl != "stock":
+        raise ValueError(f"unknown mamba_impl {mamba_impl!r}; expected 'stock' or 'short'")
+    if not MAMBA_AVAILABLE:
+        raise ImportError(
+            "mamba_ssm is not installed. Install it, or build with mamba_impl='short' "
+            "to use the native Mamba2Short kernel (needs only torch, no nvcc)."
+        )
+    m = Mamba2WithState if with_state else Mamba2
+    return m(**mamba_kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Mamba2 wrapper that exposes the final SSM hidden state
 # ---------------------------------------------------------------------------
@@ -269,6 +296,7 @@ class BidirectionalMambaLayer(nn.Module):
         chunk_size: int = 256,
         norm: str = "LayerNorm",
         dropout: float = 0.0,
+        mamba_impl: str = "stock",
     ):
         super().__init__()
         self.dim = dim
@@ -280,7 +308,8 @@ class BidirectionalMambaLayer(nn.Module):
         else:
             raise ValueError(f"Unknown norm: {norm}")
 
-        # Use standard Mamba2 (no state extraction needed for intermediate layers)
+        # No state extraction needed for intermediate layers. mamba_impl="short"
+        # builds the native kernel directly (no mamba_ssm/causal_conv1d).
         mamba_kwargs = {
             "d_model": dim,
             "d_state": d_state,
@@ -290,8 +319,8 @@ class BidirectionalMambaLayer(nn.Module):
             "ngroups": ngroups,
             "chunk_size": chunk_size,
         }
-        self.forward_mamba = Mamba2(**mamba_kwargs)
-        self.backward_mamba = Mamba2(**mamba_kwargs)
+        self.forward_mamba = _build_mamba(mamba_kwargs, mamba_impl)
+        self.backward_mamba = _build_mamba(mamba_kwargs, mamba_impl)
 
         self.gate = nn.Linear(dim, dim)
         self.gate_activation = nn.Sigmoid()
