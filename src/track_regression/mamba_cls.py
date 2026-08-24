@@ -53,7 +53,7 @@ except ImportError:
     MAMBA_AVAILABLE = False
     Mamba2 = nn.Module  # type: ignore[assignment, misc]
 
-from track_regression.mamba_state import BidirectionalMambaLayer
+from track_regression.mamba_state import BidirectionalMambaLayer, _build_mamba
 
 
 def _segment_flip_indices(cu_seqlens: Tensor, total_len: int) -> Tensor:
@@ -121,6 +121,7 @@ class BidirectionalMambaCLSFinalLayer(nn.Module):
         chunk_size: int = 256,
         norm: str = "LayerNorm",
         dropout: float = 0.0,
+        mamba_impl: str = "stock",
     ):
         super().__init__()
         self.dim = dim
@@ -141,8 +142,8 @@ class BidirectionalMambaCLSFinalLayer(nn.Module):
             "ngroups": ngroups,
             "chunk_size": chunk_size,
         }
-        self.forward_mamba = Mamba2(**mamba_kwargs)
-        self.backward_mamba = Mamba2(**mamba_kwargs)
+        self.forward_mamba = _build_mamba(mamba_kwargs, mamba_impl)
+        self.backward_mamba = _build_mamba(mamba_kwargs, mamba_impl)
 
         self.gate = nn.Linear(dim, dim)
         self.gate_activation = nn.Sigmoid()
@@ -273,6 +274,7 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         dropout: float = 0.0,
         cls_init_scale: float = 0.02,
         residual_depth_init: bool = False,
+        mamba_impl: str = "stock",
     ):
         super().__init__()
         assert num_layers >= 1, "Need at least one layer"
@@ -284,6 +286,9 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         self.cls_fwd = nn.Parameter(torch.randn(1, 1, dim) * cls_init_scale)
         self.cls_bwd = nn.Parameter(torch.randn(1, 1, dim) * cls_init_scale)
 
+        # mamba_impl="short" builds the native Mamba2Short kernel directly, so the
+        # model needs only torch (no mamba_ssm/causal_conv1d/nvcc). Checkpoints load
+        # unchanged; apply_variant("v5pc") still enables the fused Triton path.
         common = dict(
             dim=dim,
             d_state=d_state,
@@ -294,6 +299,7 @@ class BidirectionalMambaCLSEncoder(nn.Module):
             chunk_size=chunk_size,
             norm=norm,
             dropout=dropout,
+            mamba_impl=mamba_impl,
         )
 
         # Intermediate layers (plain bidirectional, CLS passes through as just
