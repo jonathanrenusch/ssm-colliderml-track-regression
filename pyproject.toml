@@ -46,8 +46,6 @@ ssm-track-regression = { path = ".", editable = true }
 datasets = ">=4.4.1,<5"
 fsspec = { version = ">=2025.10.0,<2027", extras = ["http"] }
 colliderml = ">=0.3.1,<0.4"
-mamba-ssm = "==2.3.0"
-causal-conv1d = "==1.6.0"
 
 [tool.pixi.pypi-options]
 no-build-isolation = ["flash-attn", "mamba-ssm", "causal-conv1d"]
@@ -55,8 +53,20 @@ no-build-isolation = ["flash-attn", "mamba-ssm", "causal-conv1d"]
 [tool.pixi.feature.gpu.pypi-dependencies]
 torch = { version = "==2.9.1", index = "https://download.pytorch.org/whl/cu128"}
 
+# Compiled upstream kernels (need nvcc). ONLY required for the stock Mamba2 path;
+# the native Mamba2Short kernel (mamba_impl="short") does NOT need these, so the
+# 'infer' environment below omits them and installs with no CUDA compiler.
+[tool.pixi.feature.mamba.pypi-dependencies]
+mamba-ssm = "==2.3.0"
+causal-conv1d = "==1.6.0"
+
 [tool.pixi.environments]
-default = { features = ["gpu", "fa2"] }
+default = { features = ["gpu", "fa2", "mamba"] }
+# Lean inference env: torch + pure-python deps only. No mamba-ssm/causal-conv1d/
+# flash-attn -> no source compilation -> `pixi install -e infer` works with only
+# an NVIDIA driver (no CUDA toolkit / nvcc). Use with configs that set
+# encoder mamba_impl="short" (e.g. docker/rtx_infer/presets/*).
+infer = { features = ["gpu"] }
 
 [tool.pixi.system-requirements]
 libc = "2.28"

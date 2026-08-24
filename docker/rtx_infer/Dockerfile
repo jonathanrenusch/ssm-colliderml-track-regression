@@ -28,8 +28,11 @@ RUN pip install "torch==2.9.1" --index-url https://download.pytorch.org/whl/cu12
 RUN pip install "numpy==2.4.4" "pandas==3.0.2" "lightning==2.5.2" \
                 "lion-pytorch==0.2.4" "h5py==3.16.0" "einops==0.8.2" "pyyaml"
 # CUDA extensions, compiled from source for Ada (8.9) + Hopper (9.0)
-ENV TORCH_CUDA_ARCH_LIST="8.9 9.0"
-RUN pip install --no-build-isolation "causal-conv1d==1.6.0" "mamba-ssm==2.3.0"
+# NOTE: mamba-ssm / causal-conv1d are intentionally NOT installed. The presets
+# use the native Mamba2Short kernel (mamba_impl="short"), which needs only torch
+# + Triton (bundled) -- so there is NO source compilation and no nvcc required.
+# (To run the stock v0 path you'd add: pip install --no-build-isolation \
+#  causal-conv1d==1.6.0 mamba-ssm==2.3.0  -- needs a CUDA toolkit.)
 
 # --- OPTIONAL: Nsight Systems CLI in-image so `--entrypoint nsys` works (adds ~1 GB).
 # RUN apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli \

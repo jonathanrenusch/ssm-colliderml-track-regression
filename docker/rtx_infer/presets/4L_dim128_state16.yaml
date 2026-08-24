@@ -10,6 +10,7 @@ model:
       encoder:
         class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
         init_args:
+          mamba_impl: short
           num_layers: 4
           dim: 128
           d_state: 16
