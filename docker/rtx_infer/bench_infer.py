@@ -193,18 +193,16 @@ def report(per, wall, n_tracks, peak_gib, h2d_ms, meta):
         print(f"  {k:<22}: {v}")
     print("-" * 62)
     print(f"  batches timed         : {len(per)}")
-    print(f"  per-batch ms  mean    : {a.mean():.3f}   (RAW GPU COMPUTE, H2D excluded)")
+    print(f"  batch compute ms mean : {a.mean():.3f}   (raw GPU compute; data already on GPU)")
     print(f"                std     : {a.std():.3f}  (CV {100*a.std()/a.mean():.2f}%)")
     print(f"                p50/p90 : {np.percentile(a,50):.3f} / {np.percentile(a,90):.3f}")
     print(f"  throughput            : {tps:,.0f} tracks/s  (compute only)")
-    print(f"  t2k (2000 x per-track): {2000.0*1000.0/tps:.3f} ms")
-    print(f"  peak VRAM             : {peak_gib:.2f} GiB")
-    print(f"  -- reference: H2D copy/batch {h2d_ms:.3f} ms "
-          f"({100*h2d_ms/a.mean():.2f}% of compute; separate pipeline concern)")
+    print(f"  time per 2,000 tracks : {2000.0*1000.0/tps:.3f} ms")
+    print(f"  CPU->GPU data copy    : {h2d_ms:.3f} ms/batch  ({100*h2d_ms/a.mean():.2f}% of compute)")
     print("=" * 62 + "\n", flush=True)
     return {"tracks_per_s": round(tps, 1), "t2k_ms": round(2000e3 / tps, 3),
-            "per_batch_ms_mean": round(float(a.mean()), 4), "peak_vram_gib": round(peak_gib, 3),
-            "h2d_ms": round(h2d_ms, 4), "h2d_pct": round(100 * h2d_ms / float(a.mean()), 3)}
+            "per_batch_ms_mean": round(float(a.mean()), 4),
+            "cpu_gpu_copy_ms": round(h2d_ms, 4), "cpu_gpu_copy_pct": round(100 * h2d_ms / float(a.mean()), 3)}
 
 
 def main() -> None:
