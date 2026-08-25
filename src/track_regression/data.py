@@ -10,6 +10,19 @@ Reads the preprocessed memmap format produced by
 All track selection (min/max hits, kinematics, perigee ranges) is applied
 at preprocessing time.  The dataset trusts that every track stored in the
 preprocessed shards passes selection and loads them unconditionally.
+
+Two on-disk formats are supported and detected automatically from
+``preprocessed_dir``:
+
+``legacy``
+    ``shard_XXXX/`` directories plus ``split.json`` — what
+    ``scripts/preprocess_colliderml_compact.py`` writes.
+``flat``
+    ``{train,val,test}/part_XXXX/`` flat stores — what
+    ``scripts/preprocess_flat.py`` writes.  Training then reads shuffled
+    contiguous blocks (see :mod:`track_regression.flat_data`), which removes
+    the ``num_workers: 1`` restriction, the shard buffer and the
+    ``limit_train_batches`` override.
 """
 
 from __future__ import annotations
@@ -26,12 +39,31 @@ from lightning import LightningDataModule
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, IterableDataset, Sampler
 
+from torch.utils.data.distributed import DistributedSampler
+
+from track_regression.flat_data import (
+    BlockBatchSampler,
+    FlatBlockTrackDataset,
+    FlatTrackDataset,
+    FlatTrackStore,
+)
+
 
 def _resolve_data_path(p: str | Path) -> Path:
     """Expand ``~`` in a path. Configs ship with absolute paths, but
     ``expanduser`` is kept for the rare ``~/...`` override on the CLI.
     """
     return Path(os.path.expanduser(str(p)))
+
+
+def _identity(x):
+    """Pass-through collate: the flat datasets return an already-collated batch."""
+    return x
+
+
+def _is_flat_store(root: Path) -> bool:
+    """A flat dataset root holds per-split stores; a legacy one holds split.json."""
+    return (root / "train" / "manifest.json").exists()
 
 
 class _StratifiedTailSampler(Sampler[int]):
@@ -737,6 +769,11 @@ class ColliderMLRegrDataModule(LightningDataModule):
         Limit the number of *training* shards loaded (for debugging).
         ``-1`` means use all training shards from the split file.
         Validation and test shards are always loaded in full.
+    max_val_tracks, max_test_tracks : int | None
+        Cap the number of validation / test tracks (flat stores only).  The cap
+        is spread evenly over the parts, so every input shard stays
+        represented.  Validation is GPU-bound like training, so a 10 M-track
+        val split costs real time per epoch for statistics you do not need.
     """
 
     def __init__(
@@ -753,6 +790,8 @@ class ColliderMLRegrDataModule(LightningDataModule):
         tail_upsample_threshold_mm: float = 0.0,
         tail_upsample_weight: float = 1.0,
         packed_batches: bool = False,
+        max_val_tracks: int | None = None,
+        max_test_tracks: int | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -773,6 +812,8 @@ class ColliderMLRegrDataModule(LightningDataModule):
         # — both consume cu_seqlens + seq_idx natively, skipping the
         # padded→unpad→varlen→pad round-trip on every forward.
         self.packed_batches = bool(packed_batches)
+        self.max_val_tracks = max_val_tracks
+        self.max_test_tracks = max_test_tracks
         self._collate_fn = collate_tracks_packed if self.packed_batches else collate_tracks
         # Tail upsampling (d0 based): when threshold_mm > 0 and weight != 1,
         # the train DataLoader uses a _StratifiedTailSampler that draws a
@@ -787,9 +828,18 @@ class ColliderMLRegrDataModule(LightningDataModule):
         self._tail_sampler: _StratifiedTailSampler | None = None
 
         self._orig_limit_train_batches: int | float | None = None
-        self._train_ds: ColliderMLTrackDataset | ColliderMLStreamingDataset | None = None
-        self._val_ds: ColliderMLTrackDataset | None = None
-        self._test_ds: ColliderMLTrackDataset | None = None
+        self._train_ds = None
+        self._val_ds = None
+        self._test_ds = None
+        self._train_sampler: BlockBatchSampler | None = None
+
+        # Format is a property of the directory, not a config knob, so that an
+        # existing config keeps working when its dataset is regenerated.
+        self.is_flat = _is_flat_store(self.preprocessed_dir)
+        self.flat_seed = 42
+        if self.is_flat:
+            print(f"[DataModule] flat store at {self.preprocessed_dir} — "
+                  f"block sampling, num_workers={self.num_workers}")
 
     def _load_split(self) -> dict[str, list[int]]:
         """Load shard split from ``split.json`` in the preprocessed directory."""
@@ -808,7 +858,10 @@ class ColliderMLRegrDataModule(LightningDataModule):
         return {k: data[k] for k in ("train", "val", "test")}
 
     def setup(self, stage: str | None = None) -> None:
-        """Load split file and create datasets for the requested stage."""
+        """Create datasets for the requested stage, for whichever format is present."""
+        if self.is_flat:
+            self._setup_flat(stage)
+            return
         split = self._load_split()
 
         train_shards = split["train"]
@@ -882,8 +935,102 @@ class ColliderMLRegrDataModule(LightningDataModule):
                 self.preprocessed_dir, test_shards, load_acts=self.load_acts,
             )
 
+    def _setup_flat(self, stage: str | None) -> None:
+        """Flat store: one directory per split, no split.json and no shard lists."""
+        packed = self.packed_batches
+        if stage in (None, "fit"):
+            # Training never uses ACTS data (the metrics are precomputed), so
+            # skip those mmaps.
+            self._train_ds = FlatBlockTrackDataset(
+                FlatTrackStore(self.preprocessed_dir / "train", load_acts=False),
+                packed=packed,
+            )
+            self._train_sampler = BlockBatchSampler(
+                len(self._train_ds.store), self.batch_size, seed=self.flat_seed,
+            )
+            self._val_ds = FlatTrackDataset(
+                FlatTrackStore(self.preprocessed_dir / "val", load_acts=self.load_acts,
+                               max_tracks=self.max_val_tracks),
+                packed=packed,
+            )
+            self._report_split("val", self._val_ds.store)
+        if stage in (None, "test", "predict"):
+            self._test_ds = FlatTrackDataset(
+                FlatTrackStore(self.preprocessed_dir / "test", load_acts=self.load_acts,
+                               max_tracks=self.max_test_tracks),
+                packed=packed,
+            )
+            self._report_split("test", self._test_ds.store)
+
+    @staticmethod
+    def _report_split(name: str, store: FlatTrackStore) -> None:
+        if store.n < store.full_n:
+            print(f"[DataModule] {name}: using {store.n:,} of {store.full_n:,} tracks "
+                  f"({store.n / store.full_n:.0%}), spread over all {len(store.names)} parts")
+        else:
+            print(f"[DataModule] {name}: {store.n:,} tracks")
+
+    def _assert_no_double_sharding(self) -> None:
+        """``BlockBatchSampler`` shards by rank itself — Lightning must not re-shard.
+
+        With ``use_distributed_sampler=True`` (the Lightning default) and a
+        custom sampler, ``data_connector._get_distributed_sampler`` wraps ours
+        in a ``DistributedSamplerWrapper`` and splits it a second time.  Each
+        rank then sees ``len(sampler) // world_size`` batches and the epoch
+        covers 1/world_size of the data — silently, with a progress bar that
+        looks merely small.  Fail loudly instead.
+        """
+        if self.trainer is None:
+            return
+        ws = getattr(self.trainer, "world_size", 1) or 1
+        if ws <= 1:
+            return
+        if getattr(self.trainer._accelerator_connector, "use_distributed_sampler", False):
+            raise RuntimeError(
+                "Flat block sampling requires trainer.use_distributed_sampler=false: "
+                "BlockBatchSampler already partitions blocks across ranks, and "
+                "Lightning would wrap it in a DistributedSamplerWrapper and shard it "
+                f"again — each rank would see 1/{ws} of its batches and the epoch "
+                f"would cover 1/{ws} of the training set. Add "
+                "`use_distributed_sampler: false` under `trainer:` in your config."
+            )
+
+    def _flat_train_dataloader(self) -> DataLoader:
+        # Blocks are split evenly across ranks by the sampler, so every rank
+        # yields exactly len(sampler) batches — no limit_train_batches override
+        # and no epoch-boundary NCCL mismatch.
+        self._assert_no_double_sharding()
+        self._train_sampler.set_epoch(self.trainer.current_epoch if self.trainer else 0)
+        kw: dict = dict(
+            batch_size=None, sampler=self._train_sampler, collate_fn=None,
+            num_workers=self.num_workers, pin_memory=self.pin_memory,
+            persistent_workers=False,
+        )
+        if self.prefetch_factor is not None and self.num_workers > 0:
+            kw["prefetch_factor"] = self.prefetch_factor
+        return DataLoader(self._train_ds, **kw)
+
+    def _flat_eval_dataloader(self, ds: FlatTrackDataset, shard: bool = True) -> DataLoader:
+        # __getitems__ returns the collated batch, so collate_fn is a pass-through.
+        kw: dict = dict(
+            batch_size=self.batch_size, shuffle=False, drop_last=False,
+            num_workers=self.num_workers, pin_memory=self.pin_memory,
+            collate_fn=_identity, persistent_workers=False,
+        )
+        # use_distributed_sampler is off for the flat path (see
+        # _assert_no_double_sharding), so eval loaders have to shard themselves
+        # or every rank would redundantly evaluate the whole split.
+        if shard and dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+            kw["sampler"] = DistributedSampler(ds, shuffle=False, drop_last=False)
+            kw.pop("shuffle")
+        if self.prefetch_factor is not None and self.num_workers > 0:
+            kw["prefetch_factor"] = self.prefetch_factor
+        return DataLoader(ds, **kw)
+
     def train_dataloader(self) -> DataLoader:
         assert self._train_ds is not None
+        if self.is_flat:
+            return self._flat_train_dataloader()
 
         if self.streaming:
             # Streaming dataset handles shuffling and DDP partitioning internally.
@@ -962,6 +1109,8 @@ class ColliderMLRegrDataModule(LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         assert self._val_ds is not None
+        if self.is_flat:
+            return self._flat_eval_dataloader(self._val_ds)
         dl_kwargs: dict = dict(
             batch_size=self.batch_size,
             shuffle=False,
@@ -979,6 +1128,8 @@ class ColliderMLRegrDataModule(LightningDataModule):
 
     def test_dataloader(self) -> DataLoader:
         assert self._test_ds is not None
+        if self.is_flat:
+            return self._flat_eval_dataloader(self._test_ds, shard=False)
         dl_kwargs: dict = dict(
             batch_size=self.batch_size,
             shuffle=False,

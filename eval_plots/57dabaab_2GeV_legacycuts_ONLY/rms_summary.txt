@@ -1,0 +1,8 @@
+iter-3sigma RMSE, SSM/CKF
+dataset                      N_dm                     d0                     z0                    phi                  theta                    qop
+                                              SSM/CKF µm             SSM/CKF µm           SSM/CKF mrad           SSM/CKF mrad          SSM/CKF 1/GeV
+single_muon_2GeV_legacycuts     56,640              85.0/45.2                360/113              10.1/1.36             1.15/0.473      2.65e-03/1.97e-03
+
+SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed
+dataset                                d0                 z0                phi              theta                qop
+single_muon_2GeV_legacycuts     7.63x / 17.10%     53.1x / 11.42%     21.0x / 10.38%       155x / 8.19%      18.2x / 2.96%

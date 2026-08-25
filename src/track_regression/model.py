@@ -55,6 +55,8 @@ Data flow
 
 from __future__ import annotations
 
+import os
+
 import math
 from contextlib import nullcontext
 from typing import Any, Literal
@@ -519,7 +521,22 @@ class TrackParameterRegressor(nn.Module):
         # which underestimates on-helix arc length for forward tracks).
         # ``hit_s`` is still produced by the dataloader as input feature
         # column 6, but is no longer used for token ordering.
-        sort_key = inputs["hit_time"]
+        # Encoder sort key. Truth time replaced ``s = sqrt(x²+y²+z²)`` because s
+        # underestimates on-helix arc length for forward tracks.
+        #
+        # CAVEAT for the deprecated padded path: it argsorts the *padded*
+        # sequence, and pad slots are zero-filled. Truth time is signed (the
+        # vertex time smearing pushes it down to about -0.6 ns on the legacy
+        # p200 data), so real hits with time <= 0 sort at or behind the pads and
+        # the sequence the scan sees is interleaved with padding. That hits
+        # central tracks hardest -- shortest flight path, smallest times: 27% of
+        # |eta|<0.25 tracks vs 0% beyond |eta|>2.5 -- and shows up as a large RMS
+        # spike at |eta| < 1. ``s`` is strictly positive, so it never had this
+        # problem. Checkpoints trained under the s-ordering must be evaluated
+        # with TRK_SORT_KEY=hit_s; packed mode is unaffected either way (it does
+        # not sort and has no pads).
+        _sort_field = os.environ.get("TRK_SORT_KEY", "hit_time")
+        sort_key = inputs[_sort_field if _sort_field in inputs else "hit_time"]
         seq_idx = inputs.get("seq_idx")
         hit_valid = inputs.get("hit_valid")
         cu_seqlens = inputs.get("cu_seqlens")

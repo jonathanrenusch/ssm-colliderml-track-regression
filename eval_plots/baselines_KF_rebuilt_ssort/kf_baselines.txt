@@ -1,0 +1,175 @@
+Reference-fit baselines on the ICLR eval stores
+======================================================================================================================
+Reference-fit baselines: RMSE and IQR, pre- and post-iterative-clip.
+
+Characterises the *reconstruction* baselines (truth-tracking KF and CKF) on
+every ICLR eval store, independent of any network.  For each dataset x
+estimator x parameter it reports
+
+  RMSE_pre    sqrt(mean(r**2))            over the full selected subset
+  RMSE_post   iterative 3-sigma clipped   unbinned over the whole dataset
+  IQR_pre     p75 - p25                   over the full subset
+  IQR_post    p75 - p25 of the survivors of the same clip
+  sigma_IQR   IQR / 1.349                 Gaussian-equivalent width
+
+RMSE is bias-sensitive (sqrt(sigma**2 + mean**2)); the IQR is a robust width
+that ignores tails entirely.  Quoting both separates "wide core" from
+"few catastrophic outliers": if RMSE_pre >> RMSE_post while IQR_pre ~= IQR_post,
+the damage is all tail.
+
+Two scopes are reported per estimator:
+
+  dm    double-matched (purity>75% AND efficiency>75%) AND a finite fit from
+        *every* estimator in the store -- the apples-to-apples subset, and the
+        one every SSM-vs-reference number we quote uses.
+  own   every track this estimator produced a finite fit for -- its natural
+        coverage.  The truth KF is ~100% efficient and has no seed |d0| window,
+        so its `own` scope is much larger than the CKF's and this is where its
+        real advantage shows.
+
+Only single_muon_uniform ships a `reco/truth_tracks` table, so the truth KF
+rows exist for the uniform stores alone; the fixed-pT sets and ttbar are
+CKF-only and cannot be given a truth-KF baseline without a re-reco.
+
+Clip: iterative 3-sigma, max 5 passes, window = mean +- 3*std recomputed on
+survivors; applied UNBINNED over the whole dataset (not per-eta-bin then averaged).
+sigma_IQR = IQR / 1.348980  (the IQR of a unit Gaussian).
+
+
+######################################################################################################################
+# SCOPE 'dm': double-matched, finite fit from every estimator in the store
+######################################################################################################################
+
+single_muon_uniform   [4,998,269 tracks, 3,419,038 double-matched, 3,418,865 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm       3,418,865  97.648       25.74        15.2       20.12       19.55       14.49     0.03648
+  CKF       z0     µm       3,418,865  93.348       115.4       23.39       29.98       27.47       20.37    -0.03566
+  CKF       phi    mrad     3,418,865  94.607      0.4746      0.2001      0.2532      0.2363      0.1751 -6.9489e-04
+  CKF       theta  mrad     3,418,865  93.026      0.1555      0.0644     0.06504     0.05767     0.04275 -3.8614e-05
+  CKF       qop    1/GeV    3,418,865  94.794  5.3434e-04  2.4723e-04  3.1232e-04  2.9134e-04  2.1597e-04 -8.9244e-08
+  truth-KF  d0     µm       3,418,865  97.667       18.86       14.29       19.07       18.53       13.74     0.02897
+  truth-KF  z0     µm       3,418,865  93.672       70.81       21.64       28.23       26.02       19.29    0.007493
+  truth-KF  phi    mrad     3,418,865  94.641      0.3907      0.1791      0.2332      0.2177      0.1614 -1.0161e-04
+  truth-KF  theta  mrad     3,418,865  92.966      0.1404     0.05841     0.05758     0.05096     0.03778  5.9318e-05
+  truth-KF  qop    1/GeV    3,418,865  94.941  5.2583e-04  2.2421e-04  2.8684e-04  2.6855e-04  1.9907e-04 -8.4714e-08
+
+single_muon_2GeV   [109,978 tracks, 75,613 double-matched, 62,018 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          62,018  96.704       75.82       46.01       59.96       57.47        42.6     0.01519
+  CKF       z0     µm          62,018  89.542       416.3       123.9       114.8       96.06       71.21     0.00447
+  CKF       phi    mrad        62,018  96.728       1.906       1.388       1.796       1.729       1.282    0.001537
+  CKF       theta  mrad        62,018  96.956       0.681      0.4706      0.5793      0.5563      0.4124   -0.002926
+  CKF       qop    1/GeV       62,018  97.272    0.002517    0.001965    0.002407    0.002326    0.001724  4.0593e-06
+  truth-KF  d0     µm          62,018  97.207        59.4       45.71       59.32       57.19        42.4      0.1757
+  truth-KF  z0     µm          62,018  89.377       322.7       119.2       112.8       94.68       70.18      0.5435
+  truth-KF  phi    mrad        62,018  97.196        1.78       1.384       1.772       1.716       1.272    -0.00312
+  truth-KF  theta  mrad        62,018  97.190      0.6118      0.4662      0.5708      0.5509      0.4084   -0.003118
+  truth-KF  qop    1/GeV       62,018  97.230    0.002512    0.001945    0.002382    0.002302    0.001706 -4.3769e-07
+
+single_muon_10GeV   [109,970 tracks, 77,050 double-matched, 63,082 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          63,082  98.448       25.97       19.74       26.23       25.75       19.09    -0.07364
+  CKF       z0     µm          63,082  91.815       123.1       36.73       42.61       37.89       28.09      0.2109
+  CKF       phi    mrad        63,082  97.481      0.5114      0.3817        0.49      0.4754      0.3524  1.0463e-04
+  CKF       theta  mrad        63,082  96.486      0.1645      0.1224      0.1428      0.1361      0.1009  3.4944e-04
+  CKF       qop    1/GeV       63,082  97.852  6.5058e-04  4.9457e-04  6.2363e-04  6.0746e-04  4.5031e-04 -1.6407e-07
+  truth-KF  d0     µm          63,082  98.437       22.03        19.2       25.66       25.18       18.66     0.09016
+  truth-KF  z0     µm          63,082  91.559       79.86       35.54       41.67       37.02       27.44    -0.02302
+  truth-KF  phi    mrad        63,082  97.624      0.4614      0.3722      0.4808      0.4668      0.3461 -4.4772e-04
+  truth-KF  theta  mrad        63,082  96.700      0.1564      0.1196      0.1397      0.1335     0.09895  1.0490e-04
+  truth-KF  qop    1/GeV       63,082  97.874  6.2365e-04  4.7798e-04  6.0191e-04  5.8560e-04  4.3411e-04 -5.5247e-07
+
+single_muon_100GeV   [109,958 tracks, 76,182 double-matched, 62,552 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          62,552  98.505        18.6       13.77       18.35       18.05       13.38      0.1214
+  CKF       z0     µm          62,552  95.653       58.92       20.43       26.38       25.02       18.55      0.1379
+  CKF       phi    mrad        62,552  96.686      0.2721      0.1589      0.2056      0.1974      0.1463 -7.8289e-04
+  CKF       theta  mrad        62,552  92.972     0.08082     0.04701     0.04651     0.04119     0.03053  9.1970e-05
+  CKF       qop    1/GeV       62,552  97.575  2.4027e-04  1.9696e-04  2.4976e-04  2.4228e-04  1.7960e-04 -2.8716e-07
+  truth-KF  d0     µm          62,552  98.750       14.49       12.79       17.23       16.97       12.58     0.06039
+  truth-KF  z0     µm          62,552  96.847       32.11       18.79       24.65       23.73       17.59     0.03388
+  truth-KF  phi    mrad        62,552  97.832      0.1696        0.14      0.1857       0.181      0.1341 -3.5587e-04
+  truth-KF  theta  mrad        62,552  92.632     0.06453     0.03974     0.03862     0.03433     0.02545 -4.7167e-04
+  truth-KF  qop    1/GeV       62,552  98.481  1.9592e-04  1.7648e-04  2.2492e-04  2.2066e-04  1.6357e-04 -6.6240e-07
+
+ttbar   [200,865 tracks, 115,817 double-matched, 115,817 common, NO truth_tracks -> CKF only]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm         115,817  94.080       162.4       41.53       49.28       45.23       33.53      -0.072
+  CKF       z0     µm         115,817  88.412       952.3       75.71        74.7       61.39       45.51     -0.1808
+  CKF       phi    mrad       115,817  93.421       4.169       1.248       1.336       1.193      0.8842    0.007329
+  CKF       theta  mrad       115,817  93.786        2.46      0.5107      0.5435      0.4893      0.3627    0.001254
+  CKF       qop    1/GeV      115,817  93.091    0.005412     0.00213     0.00221    0.001965    0.001457 -1.0142e-05
+
+######################################################################################################################
+# SCOPE 'own': every track this estimator fitted (its own coverage)
+######################################################################################################################
+
+single_muon_uniform   [4,998,269 tracks, 3,419,038 double-matched, 3,418,865 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm       3,419,038  97.648       25.74        15.2       20.12       19.55       14.49     0.03636
+  CKF       z0     µm       3,419,038  93.348       115.4       23.39       29.98       27.47       20.37    -0.03596
+  CKF       phi    mrad     3,419,038  94.606      0.4746      0.2002      0.2532      0.2363      0.1751 -6.9313e-04
+  CKF       theta  mrad     3,419,038  93.025      0.1555     0.06441     0.06504     0.05767     0.04275 -3.8912e-05
+  CKF       qop    1/GeV    3,419,038  94.794  5.3435e-04  2.4723e-04  3.1233e-04  2.9135e-04  2.1598e-04 -8.8072e-08
+  truth-KF  d0     µm       4,996,963  97.686       19.03       14.25       19.02       18.49       13.71     0.02746
+  truth-KF  z0     µm       4,996,963  93.697       71.36       21.52       28.11       25.92       19.21    0.007466
+  truth-KF  phi    mrad     4,996,963  94.640      0.3916      0.1767      0.2308      0.2153      0.1596 -1.0269e-04
+  truth-KF  theta  mrad     4,996,963  93.095      0.1432     0.06002     0.05937     0.05263     0.03902  6.8570e-05
+  truth-KF  qop    1/GeV    4,996,963  94.910  5.8066e-04  2.2480e-04  2.8734e-04  2.6889e-04  1.9933e-04 -1.3497e-07
+
+single_muon_2GeV   [109,978 tracks, 75,613 double-matched, 62,018 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          75,613  96.745       75.61       46.02        60.1       57.64       42.73    -0.04988
+  CKF       z0     µm          75,613  89.541       408.5       123.6       114.9       96.07       71.22     -0.1516
+  CKF       phi    mrad        75,613  96.780       1.913       1.388       1.799       1.733       1.285    0.002316
+  CKF       theta  mrad        75,613  96.966       0.673        0.47      0.5784      0.5558       0.412   -0.003088
+  CKF       qop    1/GeV       75,613  97.273    0.002509    0.001967    0.002412     0.00233    0.001727  1.8723e-06
+  truth-KF  d0     µm          89,959  97.227       59.31       45.34       58.71       56.69       42.03      0.2174
+  truth-KF  z0     µm          89,959  89.278       315.9       114.2       110.1       92.43       68.52      0.7384
+  truth-KF  phi    mrad        89,959  97.135       1.779       1.362       1.739        1.68       1.246   -0.001796
+  truth-KF  theta  mrad        89,959  97.159      0.6239      0.4723      0.5809        0.56      0.4151   -0.001322
+  truth-KF  qop    1/GeV       89,959  96.850    0.002914    0.001966    0.002404    0.002308    0.001711  5.2698e-06
+
+single_muon_10GeV   [109,970 tracks, 77,050 double-matched, 63,082 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          77,050  98.444       27.15       19.74        26.2       25.75       19.09    -0.08355
+  CKF       z0     µm          77,050  91.860       133.2       36.61       42.34       37.76       27.99      0.1128
+  CKF       phi    mrad        77,050  97.413      0.5186      0.3801      0.4908      0.4756      0.3526  2.4230e-05
+  CKF       theta  mrad        77,050  96.492      0.1654      0.1229      0.1438      0.1369      0.1014  2.2778e-04
+  CKF       qop    1/GeV       77,050  97.831  6.3811e-04  4.9400e-04  6.2364e-04  6.0691e-04  4.4990e-04  4.6902e-07
+  truth-KF  d0     µm          89,953  98.454       21.92       19.18       25.57        25.1       18.61     0.05183
+  truth-KF  z0     µm          89,953  91.635       77.71       34.63       40.97       36.52       27.07     0.03705
+  truth-KF  phi    mrad        89,953  97.568      0.4552      0.3674      0.4737      0.4601      0.3411   -0.001691
+  truth-KF  theta  mrad        89,953  96.709       0.159      0.1218      0.1431      0.1368      0.1014 -2.4412e-04
+  truth-KF  qop    1/GeV       89,953  97.727  6.4213e-04  4.8179e-04  6.0603e-04  5.8839e-04  4.3617e-04 -2.1576e-06
+
+single_muon_100GeV   [109,958 tracks, 76,182 double-matched, 62,552 common]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm          76,182  98.511       19.47       13.76       18.33       18.02       13.35      0.1174
+  CKF       z0     µm          76,182  95.705       61.72       20.45       26.42       25.08        18.6      0.1609
+  CKF       phi    mrad        76,182  96.661      0.2778      0.1583      0.2055      0.1974      0.1463 -9.5939e-04
+  CKF       theta  mrad        76,182  93.011     0.08131     0.04726     0.04673     0.04143     0.03071  2.1168e-04
+  CKF       qop    1/GeV       76,182  97.607  2.3985e-04  1.9720e-04  2.4979e-04  2.4241e-04  1.7970e-04 -2.4372e-07
+  truth-KF  d0     µm          89,943  98.843       14.38       12.81       17.23       16.98       12.59     0.04731
+  truth-KF  z0     µm          89,943  96.739       31.83       18.81       24.65       23.69       17.56     0.01926
+  truth-KF  phi    mrad        89,943  97.864      0.1676      0.1389      0.1845      0.1798      0.1333 -2.3473e-04
+  truth-KF  theta  mrad        89,943  92.755     0.06624     0.04149     0.04041     0.03573     0.02648 -1.8395e-04
+  truth-KF  qop    1/GeV       89,943  98.518  2.0371e-04  1.7754e-04  2.2615e-04  2.2208e-04  1.6463e-04 -1.0580e-07
+
+ttbar   [200,865 tracks, 115,817 double-matched, 115,817 common, NO truth_tracks -> CKF only]
+  est       par    unit             N   kept%    RMSE_pre   RMSE_post     IQR_pre    IQR_post   sIQR_post   mean_post
+  -------------------------------------------------------------------------------------------------------------------
+  CKF       d0     µm         115,817  94.080       162.4       41.53       49.28       45.23       33.53      -0.072
+  CKF       z0     µm         115,817  88.412       952.3       75.71        74.7       61.39       45.51     -0.1808
+  CKF       phi    mrad       115,817  93.421       4.169       1.248       1.336       1.193      0.8842    0.007329
+  CKF       theta  mrad       115,817  93.786        2.46      0.5107      0.5435      0.4893      0.3627    0.001254
+  CKF       qop    1/GeV      115,817  93.091    0.005412     0.00213     0.00221    0.001965    0.001457 -1.0142e-05

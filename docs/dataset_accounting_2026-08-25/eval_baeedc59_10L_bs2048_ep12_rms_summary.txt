@@ -1,0 +1,16 @@
+iter-3sigma RMSE, SSM/CKF
+dataset                      N_dm                     d0                     z0                    phi                  theta                    qop
+                                              SSM/CKF µm             SSM/CKF µm           SSM/CKF mrad           SSM/CKF mrad          SSM/CKF 1/GeV
+single_muon_100GeV         63,316              23.2/12.8               354/18.8             1.46/0.140             1.45/0.040      5.68e-04/1.76e-04
+single_muon_10GeV          63,736              27.8/19.2               364/35.5             1.56/0.372             1.46/0.120      9.44e-04/4.78e-04
+single_muon_2GeV           62,783              71.6/45.7                510/119              2.69/1.38             1.95/0.466      3.56e-03/1.94e-03
+single_muon_uniform     3,491,208              24.4/14.3               362/21.6             1.50/0.179             1.47/0.059      6.39e-04/2.24e-04
+ttbar                     115,817              76.4/41.5               554/75.7              2.97/1.25             2.61/0.511      4.50e-03/2.13e-03
+
+SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed
+dataset                                d0                 z0                phi              theta                qop
+single_muon_100GeV          16.3x / 1.61%      49.1x / 1.87%       139x / 1.37%       111x / 3.43%      1.87x / 1.94%
+single_muon_10GeV           14.1x / 1.74%      47.3x / 1.72%       114x / 1.26%       104x / 3.41%      9.15x / 2.13%
+single_muon_2GeV            5.45x / 2.70%      34.4x / 3.56%      72.8x / 2.20%      86.6x / 4.39%      12.6x / 2.65%
+single_muon_uniform         20.7x / 3.31%      65.3x / 2.77%       173x / 2.49%       144x / 4.15%      18.6x / 4.95%
+ttbar                       6.20x / 9.96%      10.8x / 6.62%     4.82x / 11.26%      24.1x / 7.18%     17.5x / 12.49%

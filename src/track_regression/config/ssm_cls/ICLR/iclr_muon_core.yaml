@@ -1,0 +1,198 @@
+# =============================================================================
+# iclr_muon_core — training on the drift_beamspot single-muon set (core variant)
+# =============================================================================
+# Differences from finetune_ssm_cls_muon_kf_hits.yaml, and why:
+#
+#  * data.preprocessed_dir points at a *flat* store (scripts/preprocess_flat.py).
+#    The DataModule detects the format from the directory and switches to
+#    shuffled contiguous-block sampling, so `streaming`, `shard_buffer_size`
+#    and the `limit_train_batches` override are all gone.  num_workers is no
+#    longer pinned to 1: measured 1.4 M tracks/s at one worker against 14 k
+#    tracks/s of single-GPU compute (see track_regression.flat_data).
+#
+#  * d0 and z0 norm_min/norm_max widened.  Both old values were the `core`
+#    selection windows, which no longer exist, so both were stale:
+#
+#        d0  +-2.5  -> +-7.1    measured |d0| max 7.069 mm
+#        z0  +-200  -> +-270    measured |z0| max 268.8 mm
+#
+#    The beamspot is uniform over +-5 mm in x/y and +-200 mm in z, so truth d0
+#    runs to sqrt(2)*5 = 7.07 mm and z0 runs past 200 mm by the helix
+#    vertex->perigee correction.  _linear_normalise is unclipped, so the old
+#    values did not crash — they just handed the head targets outside [-1, 1]
+#    (1.84% of tracks for z0, which carries the largest loss weight) and
+#    silently mis-weighted those parameters against the other three.
+#    Ranges verified against all 201,529,256 tracks, not a sample.
+#
+#    qop tightened +-2.0 -> +-1.0, which is its exact measured support: the gun
+#    is uniform in pT over [1, 110] GeV (not [10, 110]), so max|q/p| = 1/|p|min
+#    = 1.0 and min|q/p| = 1/1107 = 0.0009.  It must stay symmetric — the gun
+#    fires mu-/mu+ 50/50.  See the note on the qop block for the +-0.25
+#    alternative.
+#
+#    theta (+-3 in eta) is unchanged: the |eta| < 3 cut is still applied, so
+#    that range is exact.
+# =============================================================================
+
+trainer:
+  # BlockBatchSampler partitions blocks across ranks itself.  Lightning's
+  # default (true) would wrap it in a DistributedSamplerWrapper and shard it a
+  # SECOND time: each rank would see len(sampler)//world_size batches and one
+  # epoch would cover 1/world_size of the training set.  The DataModule raises
+  # if this is left on under DDP.
+  use_distributed_sampler: false
+  devices: -1
+  max_epochs: 50
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-ICLR-pretrain-10L-muon
+      project_name: ssm-track-regression-iclr
+      offline_directory: logs/comet_offline
+  callbacks:
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 30
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  pretrained_ckpt_path: null
+  optimizer: MuonHybrid
+  lrs_config:
+    schedule: wsd
+    initial: 5.0e-06
+    max: 5.0e-05
+    end: 2.5e-06
+    weight_decay: 0.02
+    betas: [0.9, 0.95]
+    muon_max: 1.5e-04
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+    pct_start: 0.02
+    decay_pct: 0.5
+    skip_scheduler: false
+
+  model:
+    init_args:
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          # chunk_size intentionally absent: KernelSwapCallback runs
+          # variant `auto`, which replaces every Mamba2 layer with
+          # Mamba2Short (pure-torch v3c in train, fused v5pc in eval).
+          # Mamba2Short is chunk-free — it stores chunk_size for API
+          # parity and never reads it (mamba_short.py:90,104).  The knob
+          # only bites on variant `v0` (stock mamba_ssm), which would
+          # then use the class default 256 instead of 16.
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -7.1      # generator bound: sqrt(2) * 5 mm beamspot
+              norm_max: 7.1
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -270.0    # |z0| reaches 268.8 mm, measured over all 201.5 M tracks
+              norm_max: 270.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 0.01
+              # Measured over all 191,532,752 train tracks: q/p spans
+              # [-0.999942, +0.999865], symmetric — the gun fires mu-/mu+ 50/50,
+              # so norm_min/norm_max must be symmetric about 0.
+              # Set by the gun's pT range, which is [1, 110] GeV (particlegun
+              # config: energy_min 1.0, transverse true, log_uniform false), NOT
+              # [10, 110]: max|q/p| = 1/|p|min = 1/1.00, min|q/p| = 1/|p|max =
+              # 1/1107 = 0.0009.
+              #
+              # +-1.0 covers the support exactly, so nothing lands outside
+              # [-1, 1].  Trade-off: q/p ~ 1/p is heavily peaked, so the bulk is
+              # compressed — median |q/p| = 0.0088 maps to 0.009.  For more
+              # resolution on the bulk, +-0.25 covers 99.02% (0.98% / 1.88 M
+              # tracks outside, worst case 4x) and puts the median at 0.035.
+              # +-0.1 leaves 3.58% / 6.86 M tracks outside, reaching 10x — too
+              # aggressive for an unclipped pinball loss.
+              norm_min: -1.0
+              norm_max: 1.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+
+data:
+  # Copy this from /eos to /scratch before training — /scratch reads far faster.
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining/single_muon_uniform
+  load_acts: true          # val/test only; the train store never loads it
+  batch_size: 10000
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 4
+  packed_batches: true
+  # The split is 95/2.5/2.5 (192/5/5 input shards), so val and test are already
+  # ~5 M tracks each and no cap is needed. `max_val_tracks` / `max_test_tracks`
+  # remain available on the DataModule to subsample further without
+  # reprocessing; the cap is spread over all parts rather than taken as a prefix.

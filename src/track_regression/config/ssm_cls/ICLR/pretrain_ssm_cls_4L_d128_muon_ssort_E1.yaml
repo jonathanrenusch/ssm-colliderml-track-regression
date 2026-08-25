@@ -1,0 +1,253 @@
+# =============================================================================
+# E1 of CLAUDE.md §4 — the 09c54481 recipe re-run on the s-SORTED stores.
+# =============================================================================
+# Identical to pretrain_ssm_cls_4L_d128_muon.yaml (the recipe of run 09c54481:
+# 4L / dim 128 / d_state 128, Muon-hybrid + WSD, 4 x 32 k global batch) except:
+#   * data.preprocessed_dir -> /scratch/colliderml/ICLR_retraining_ssort/...
+#     (hits ordered by s; the original ICLR_retraining stores are ordered by the
+#     broken tracker_hits.time — strips first — see CLAUDE.md §0.1)
+#   * max_epochs 10 — the comparison against 09c54481 is made at equal epochs
+#     (its per-epoch val/total is in CLAUDE.md-referenced train_128.out), and
+#     10 epochs is enough to see whether the ordering was the limiter.
+#   * logger name.
+# Evaluate with: bash scripts/04_eval_ckpt_iclr.sh <run_dir> <ckpt> <out_dir>
+# =============================================================================
+# =============================================================================
+# ICLR 4L SSM-CLS *pretrain* — d_state=128, Muon (2-D) + AdamW (1-D) hybrid
+# + WSD, multi-GPU at 32 k tracks/device, drift_beamspot single-muon `core`.
+# =============================================================================
+# Derived from ``experimental/scaling/finetune_ssm_cls_4L_muon.yaml``: same 4-
+# layer narrow network, same Muon/AdamW hybrid and WSD schedule.  What changed
+# and why:
+#
+#   1. **Pretrain, not fine-tune.**  ``pretrained_ckpt_path`` is removed — this
+#      run trains from scratch on the muon set.
+#   2. **d_state 16 -> 128.**  The one architectural change.  128 is a power
+#      of two and ngroups stays 1, so the fused v5pc eval kernel still
+#      applies.  With dim=128 / expand=2 / headdim=32 this is 8 heads x 128
+#      states; encoder params go 908,224 -> 1,318,912.
+#   3. **Multi-GPU, batch_size 32000 per device** (``devices: -1``).  32 k is
+#      per-rank in DDP, so the global batch is 32 k x n_gpu — 128 k on the 4x
+#      H100 node.  Measured ~43 GB/device, so check `nvidia-smi` for stray
+#      processes before launching: leftovers will OOM it.
+#   4. **Muon kept, and it is the right call at this batch size**: the source
+#      config's hybrid is carried over verbatim (muon_max 1.5e-4 = 3x the AdamW
+#      peak, momentum 0.95, ns_steps 5, WSD with 2% warmup and 50% cooldown).
+#      Muon's Newton-Schulz orthogonalisation makes the 2-D update scale-free,
+#      which is what keeps a very large batch from collapsing the effective
+#      step size the way Lion/AdamW alone would.
+#   5. **New dataset + flat loading.**  The DataModule detects the flat store
+#      from the directory and uses shuffled contiguous-block sampling, so
+#      ``streaming`` / ``shard_buffer_size`` are gone and ``num_workers`` is no
+#      longer pinned to 1.
+#   6. **Width keys pinned explicitly.**  The source config inherited
+#      ``experimental/scaling/base.yaml`` (dim=128, heads [128]); this folder's
+#      base is the production-width one (dim=192, heads [256]/[192]).  The
+#      three differing keys are therefore set here by hand so the network is
+#      identical to the scaling-study 4L model.  Those three, plus d_state and
+#      the logger name, are the *only* differences between the two bases.
+#   7. **d0 / z0 loss norm ranges widened** — the old values were the `core`
+#      selection windows, which this campaign no longer applies:
+#          d0  +-2.5 -> +-7.1   (measured |d0| max 7.069 mm)
+#          z0  +-200 -> +-270   (measured |z0| max 268.8 mm)
+#      over all 201,529,256 tracks.  ``_linear_normalise`` is unclipped, so the
+#      old values would silently push 1.84% of z0 targets outside [-1, 1].
+# =============================================================================
+# Companion fine-tune for ``pretrain_ssm_cls_4L.yaml`` (4-layer leaf of the
+# depth-scaling sweep). Inherits ``experimental/scaling/base.yaml`` which
+# already pins the narrower architecture used by the scaling study:
+# dim=128, d_state=16, state_head=128, output_head_hidden_layers=[128],
+# input_net_hidden_layers=[128], pool=ssm_cls, fp32 encoder.
+#
+# This config is the 4L equivalent of ``ssm_cls/finetune_ssm_cls_muon.yaml``:
+# Muon updates 2-D weight matrices via the Newton-Schulz orthogonalised
+# gradient; 1-D parameters (biases, layer-norms, SSM scalars) run under
+# AdamW. Two LR schedules feed the two groups (``muon_max`` vs ``max``).
+#
+# LR rationale (verified with the user before authoring):
+#   - 4L pretrain peaked at 5e-5 (Lion, OneCycle) — see scaling/base.yaml.
+#   - AdamW peak (max) = 5e-5 matches pretrain peak exactly, preserving the
+#     Lion-trained weight-norm basin across the optimizer family switch.
+#   - Muon peak (muon_max) = 1.5e-4 = 3x AdamW peak, the same ratio used by
+#     the 10L production fine-tune.
+#   - Muon already auto-rescales its update by sqrt(max(fan_in, fan_out)),
+#     so the narrower dim=128 trunk is partly self-correcting vs dim=192.
+#   - No depth-ratio boost applied: SSMs are sensitive at fine-tune time,
+#     and the safer starting point is pretrain-LR-matched. If under-fit at
+#     val/total minimum, raise muon_max first (it's the orthogonalised
+#     group that controls trunk expressivity).
+#
+# Pool-head shape MUST match the pretrain checkpoint for warm-start to
+# load: state_head_output_dim=128 / state_head_hidden_layers=[128] /
+# state_head_dropout=0.0 (inherited from scaling/base + scaling 4L leaf).
+# =============================================================================
+
+trainer:
+  # BlockBatchSampler partitions blocks across ranks itself.  Lightning's
+  # default (true) would wrap it in a DistributedSamplerWrapper and shard it a
+  # SECOND time: each rank would see len(sampler)//world_size batches and one
+  # epoch would cover 1/world_size of the training set.  The DataModule raises
+  # if this is left on under DDP.
+  use_distributed_sampler: false
+  devices: -1              # all visible GPUs; batch_size below is PER DEVICE
+  max_epochs: 10
+  precision: 32-true
+  gradient_clip_val: 1.0
+  reload_dataloaders_every_n_epochs: 1
+  benchmark: true
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-ICLR-E1-4L-d128-muon-bs32k-ssort
+      project_name: ssm-track-regression-iclr
+      offline_directory: logs/comet_offline
+  callbacks:
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto   # v3c (compiled pure-torch) in train, v5pc (fused Triton) in eval
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 30
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  # Pretrain: no warm start.
+  pretrained_ckpt_path: null
+  optimizer: MuonHybrid
+  lrs_config:
+    schedule: wsd
+    initial: 5.0e-06
+    max: 5.0e-05           # AdamW group peak — matches 4L pretrain peak
+    end: 2.5e-06
+    weight_decay: 0.02
+    betas: [0.9, 0.95]
+    muon_max: 1.5e-04      # Muon group peak — 3x AdamW (production ratio)
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+    pct_start: 0.02
+    decay_pct: 0.5         # 50% cosine cooldown
+    skip_scheduler: false
+
+  model:
+    init_args:
+      # --- width, pinned explicitly ------------------------------------------
+      # This folder's base.yaml is the production-width one (dim=192,
+      # output_head [256], input_net [192]).  The scaling-study 4L network is
+      # narrower, so the three differing keys are restored here.  Without them
+      # the model would silently be a different size from the 4L leaf.
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      # Pool-head shape of the narrow scaling variant.
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 4
+          dim: 128
+          d_state: 128      # raised from 16; power of two, ngroups=1 -> v5pc kernel still applies
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          # chunk_size intentionally absent: KernelSwapCallback runs
+          # variant `auto`, which replaces every Mamba2 layer with
+          # Mamba2Short (pure-torch v3c in train, fused v5pc in eval).
+          # Mamba2Short is chunk-free — it stores chunk_size for API
+          # parity and never reads it (mamba_short.py:90,104).  The knob
+          # only bites on variant `v0` (stock mamba_ssm), which would
+          # then use the class default 256 instead of 16.
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -7.1     # was -2.5 (old core d0 window); |d0| max 7.069 mm
+              norm_max: 7.1
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -270.0   # was -200 (old core z0 window); |z0| max 268.8 mm
+              norm_max: 270.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 1.0
+              # Measured over all 191,532,752 train tracks: q/p spans
+              # [-0.999942, +0.999865], symmetric — the gun fires mu-/mu+ 50/50,
+              # so norm_min/norm_max must be symmetric about 0.
+              # Set by the gun's pT range, which is [1, 110] GeV (particlegun
+              # config: energy_min 1.0, transverse true, log_uniform false), NOT
+              # [10, 110]: max|q/p| = 1/|p|min = 1/1.00, min|q/p| = 1/|p|max =
+              # 1/1107 = 0.0009.
+              #
+              # +-1.0 covers the support exactly, so nothing lands outside
+              # [-1, 1].  Trade-off: q/p ~ 1/p is heavily peaked, so the bulk is
+              # compressed — median |q/p| = 0.0088 maps to 0.009.  For more
+              # resolution on the bulk, +-0.25 covers 99.02% (0.98% / 1.88 M
+              # tracks outside, worst case 4x) and puts the median at 0.035.
+              # +-0.1 leaves 3.58% / 6.86 M tracks outside, reaching 10x — too
+              # aggressive for an unclipped pinball loss.
+              norm_min: -1.0
+              norm_max: 1.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+
+data:
+  # Copy /eos -> /scratch first: scripts/copy_dataset.sh <eos_path> <this_path>
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_ssort/single_muon_uniform
+  load_acts: true          # val/test only; the train store never loads it
+  batch_size: 32000        # PER DEVICE — global batch is 32000 x n_gpu
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true

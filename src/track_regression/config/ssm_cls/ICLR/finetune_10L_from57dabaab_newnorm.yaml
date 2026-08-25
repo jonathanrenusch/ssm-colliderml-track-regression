@@ -1,0 +1,256 @@
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  strategy: ddp
+  devices: -1
+  num_nodes: 1
+  precision: 32-true
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-ICLR-ft10L-from57dabaab-newnorm-bs12k
+      project_name: ssm-track-regression-iclr
+      offline_directory: logs/comet_offline
+  callbacks:
+  - class_path: track_regression._lib.callbacks.InferenceTimer
+  - class_path: track_regression.callbacks.MinimalGpuMonitor
+    init_args:
+      log_every_n_steps: 200
+  - class_path: track_regression._lib.callbacks.SaveConfig
+  - class_path: track_regression._lib.callbacks.Checkpoint
+    init_args:
+      monitor: val/total
+      mode: min
+      verbose: true
+  - class_path: track_regression.callbacks.RegressionPredictionWriter
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+  - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+    init_args:
+      refresh_rate: 200
+  fast_dev_run: false
+  max_epochs: 10
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 1
+  log_every_n_steps: 200
+  enable_checkpointing: null
+  enable_progress_bar: true
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: null
+  deterministic: false
+  benchmark: true
+  inference_mode: true
+  use_distributed_sampler: false
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 1
+  default_root_dir: logs
+  model_registry: null
+model:
+  model:
+    class_path: track_regression.model.TrackParameterRegressor
+    init_args:
+      input_dim: 12
+      dim: 192
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          chunk_size: 16
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: false
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -7.1
+              norm_max: 7.1
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -270.0
+              norm_max: 270.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+            qop:
+              type: quantile
+              weight: 1.0
+              norm_min: -1.0
+              norm_max: 1.0
+              quantiles:
+              - 0.05
+              - 0.1
+              - 0.25
+              - 0.5
+              - 0.75
+              - 0.9
+              - 0.95
+          parameter_order:
+          - d0
+          - z0
+          - phi
+          - theta
+          - qop
+          qop_tail_weight: 0.0
+          qop_scale: 2.0
+          loss_aggregation: sum
+      pool: ssm_cls
+      state_head_output_dim: 128
+      state_head_hidden_layers:
+      - 192
+      state_head_dropout: 0.0
+      state_head_activation: SiLU
+      output_head_hidden_layers:
+      - 256
+      output_head_dropout: 0.0
+      output_head_activation: SiLU
+      input_net_hidden_layers:
+      - 192
+      input_net_dropout: 0.0
+      input_net_activation: SiLU
+      input_fields:
+      - x
+      - y
+      - z
+      - r
+      - phi_hit
+      - theta_hit
+      - s
+      - volume_id
+      - layer_id
+      - surface_id
+      - detector
+      - eta_hit
+      fourier_scales:
+      - -5
+      - -4
+      - -3
+      - -2
+      - -1
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      fourier_base: 2
+      norm_min:
+      - -1031.0
+      - -1031.0
+      - -3026.0
+      - 31.0
+      - -3.1416
+      - 0.027
+      - 31.0
+      - 16.0
+      - 2.0
+      - 1.0
+      - 0.0
+      - -4.3
+      norm_max:
+      - 1031.0
+      - 1031.0
+      - 3026.0
+      - 1032.0
+      - 3.1416
+      - 3.114
+      - 3185.0
+      - 30.0
+      - 16.0
+      - 3360.0
+      - 8.0
+      - 4.3
+      encoder_autocast_dtype: float32
+      output_head_init_scale: 0.01
+      separate_d0_head: false
+      d0_grad_scale: 1.0
+      disable_main_pool_head: false
+  lrs_config:
+    schedule: wsd
+    initial: 1.0e-05
+    max: 0.0001
+    end: 5.0e-06
+    weight_decay: 0.02
+    betas:
+    - 0.9
+    - 0.95
+    muon_max: 0.0003
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+    pct_start: 0.02
+    decay_pct: 0.15
+    skip_scheduler: false
+  optimizer: MuonHybrid
+  name: TrackRegression
+  pretrained_ckpt_path: /shared/tracking/logs_Neurips/paper_plots/TRK-v2-SSMCLS-Q7-MuonHybrid-WSD-FP32-finetune__57dabaab__ep49/best.ckpt
+  pretrained_ckpt_strict: true
+  gradient_clip_val: 1.0
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining/single_muon_uniform
+  batch_size: 12000
+  num_workers: 4
+  prefetch_factor: 4
+  pin_memory: true
+  load_acts: true
+  packed_batches: false
+  num_train_shards: -1
+optimizer: null
+lr_scheduler: null
+ckpt_path: null

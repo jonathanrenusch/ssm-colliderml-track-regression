@@ -1,0 +1,20 @@
+iter-3sigma RMSE, SSM/CKF
+dataset                      N_dm                     d0                     z0                    phi                  theta                    qop
+                                              SSM/CKF µm             SSM/CKF µm           SSM/CKF mrad           SSM/CKF mrad          SSM/CKF 1/GeV
+OWN_p200_core_kf_matched_finetune  6,591,752              12.2/65.7                171/188             0.617/2.11            0.778/0.802      3.17e-03/3.44e-03
+single_muon_100GeV         77,210               910/13.8               529/20.4             26.5/0.158             1.55/0.047      1.35e-03/1.97e-04
+single_muon_10GeV          77,915              1112/19.7               545/36.5             33.5/0.380             1.57/0.123      1.52e-03/4.94e-04
+single_muon_2GeV           76,651              1608/46.0                955/124              54.5/1.39             2.86/0.470      2.85e-03/1.97e-03
+single_muon_2GeV_legacycuts     56,640              85.0/45.2                360/113              10.1/1.36             1.15/0.473      2.65e-03/1.97e-03
+single_muon_uniform     3,491,385              1055/15.2               575/23.4             32.4/0.200             1.67/0.065      1.43e-03/2.47e-04
+ttbar                     115,817              1383/41.5               520/75.7              48.3/1.25             2.16/0.511      3.25e-03/2.13e-03
+
+SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed
+dataset                                d0                 z0                phi              theta                qop
+OWN_p200_core_kf_matched_finetune      5.59x / 3.16%     4.85x / 10.76%      4.73x / 4.26%      2.65x / 4.06%      1.50x / 4.42%
+single_muon_100GeV          1.59x / 8.72%     35.9x / 12.51%     8.31x / 10.58%      110x / 10.72%      1.50x / 4.64%
+single_muon_10GeV           1.33x / 5.68%     32.7x / 12.42%      5.68x / 7.71%      100x / 11.14%      6.09x / 4.43%
+single_muon_2GeV            1.04x / 0.73%     20.4x / 12.87%      3.98x / 1.89%     62.4x / 11.44%      17.0x / 3.50%
+single_muon_2GeV_legacycuts     7.63x / 17.10%     53.1x / 11.42%     21.0x / 10.38%       155x / 8.19%      18.2x / 2.96%
+single_muon_uniform         1.39x / 6.43%     41.3x / 12.50%      8.15x / 8.56%      128x / 10.90%      8.39x / 5.32%
+ttbar                       1.10x / 1.97%     8.21x / 14.45%      1.08x / 1.53%     7.29x / 14.75%      3.36x / 4.99%

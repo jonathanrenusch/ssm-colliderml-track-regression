@@ -1,0 +1,50 @@
+57dabaab (10L d192 ds32, legacy p200 core_kf_matched finetune, ep49)
+transferred to the NEW drift_beamspot single-muon test split
+
+METRIC (every number below)
+  iterative 3-sigma clipped RMSE of (prediction - truth):
+  sqrt(mean(r^2)) over the subset surviving 5 passes of +-3sigma clipping about
+  the mean. Identical function for all columns
+  (track_regression.eval_utils.iterative_rms_convergence).
+  phi residuals wrapped to (-pi, pi]. Units um / mrad / (1/GeV).
+
+TRACK COUNTS  (4,998,269 selected tracks in the test split)
+  CKF double-matched        3,491,385   69.9%
+  truth-KF fitted           4,996,963  100.0%   truth seeding: no acceptance loss
+  paired in-range subset    2,580,114   51.6%   DM & truth-KF & |d0|<2.5 & |z0|<200
+
+                                                                  ratio vs truth-KF
+  param  unit | SSM all DM      SSM      CKF  truth-KF |    SSM    CKF | legacy in-domain
+  ------------------------------------------------------------------------------------
+  d0       um |       1055    41.41    14.67     14.24 |   2.9x   1.0x |           12.19
+  z0       um |      574.7    225.8    22.13     21.06 |  10.7x   1.1x |           171.2
+  phi    mrad |      32.44      2.4   0.1866    0.1764 |  13.6x   1.1x |           0.617
+  theta  mrad |      1.668   0.7315  0.06374   0.06073 |  12.0x   1.0x |           0.778
+  qop   1/GeV |   0.001434 0.001155 2.312e-4  2.254e-4 |   5.1x   1.0x |        3.172e-3
+
+  'SSM all DM'       every double-matched track, including |d0| the model cannot express
+  SSM / CKF / truth-KF   the paired in-range subset (identical tracks)
+  'legacy in-domain' the same checkpoint on p200_core_kf_matched, its training domain
+
+READING IT
+* truth-KF and CKF have essentially the SAME resolution here (1.0-1.1x). On
+  single muons with no pileup the CKF's hit assignment is already near-perfect
+  once it finds the track; the two differ in EFFICIENCY (69.9% vs 100%), not in
+  fit quality. Choosing truth-KF as the reference buys coverage, not a harder
+  number -- except that it removes the |d0| > 3 mm seeding blind spot.
+* The baseline moved enormously. On legacy p200 the CKF gave d0 65.7 um and this
+  SSM beat it 5x. The new truth-KF gives d0 14.24 um -- 4.6x better than the old
+  baseline -- because the data is single muons, no pileup, median pT 55 GeV.
+* So the old "SSM beats the KF" headline does NOT carry over: even a perfect
+  transfer (12.19 um, the in-domain value) would only match the truth-KF on d0,
+  and on z0/phi/theta/qop the in-domain SSM values are already 3-14x WORSE than
+  this baseline.
+
+CAVEAT ON THE d0 FLOOR
+  The truth targets are recomputed analytically from the production vertex and
+  momentum assuming a uniform 2 T solenoid (perigee.py), because the campaign
+  ships perigee_d0/perigee_z0 as all-NULL. That reconstruction agrees with the
+  truth-KF to ~19 um IQR in d0 with zero median, so at the ~14 um level the
+  "truth-KF resolution" and the target's own accuracy cannot be separated.
+  Treat ~14 um as a floor of the measurement, not a proven KF resolution; any
+  sub-15 um claim needs a better truth reference.

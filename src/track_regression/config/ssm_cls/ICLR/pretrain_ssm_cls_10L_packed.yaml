@@ -1,0 +1,209 @@
+# =============================================================================
+# ICLR headline pretrain — 10 L / dim=192 / d_state=32, Lion + OneCycle,
+# fp32 encoder, drift_beamspot single-muon `core` — **PACKED batching**.
+# =============================================================================
+# Straight port of ``ssm_cls/pretrain_ssm_cls_packed.yaml`` to the ICLR
+# dataset.  Only three things differ from that config, all dataset-driven:
+#
+#   1. data.preprocessed_dir -> the flat single-muon store.  Nothing else in
+#      the data block changes: the DataModule detects the flat layout from the
+#      directory and switches to shuffled contiguous-block sampling on its own,
+#      so `streaming` / `shard_buffer_size` are not needed (and were never set
+#      here anyway).
+#   2. Comet project + run name (see the campaign note below).
+#   3. d0 and z0 loss norm ranges.  **This is the one deliberate deviation from
+#      "no other parameters changed"** — flagged rather than hidden.  Both old
+#      values were the `core` selection windows, and those windows no longer
+#      exist on this campaign:
+#
+#          d0  -2.5 / 2.5   ->  -7.1 / 7.1     measured |d0| max 7.069 mm
+#          z0  -200 / 200   ->  -270 / 270     measured |z0| max 268.8 mm
+#
+#      Measured over all 201,529,256 tracks, not a sample.  `_linear_normalise`
+#      is unclipped, so the old values do not crash — they hand the head
+#      targets outside [-1, 1] (1.84% of tracks for z0, which carries the
+#      largest loss weight) and silently mis-weight d0 and z0 against the other
+#      three.  To reproduce the pre-ICLR numerics exactly, put the four numbers
+#      back; everything else here is byte-for-byte the old config.
+#
+# Model, optimizer, schedule, batch size, devices and callbacks are unchanged.
+# =============================================================================
+# Packed-batch equivalent of ``pretrain_ssm_cls_padded.yaml``. Identical
+# hyperparameters; the only behavioural difference is that the SSM-CLS
+# encoder runs its packed forward path (segment-wise flip for the
+# backward Mamba, CLS tokens interleaved at each track boundary),
+# inherited from ``ssm_cls/base.yaml``'s ``packed_batches: true``
+# default. Throughput target: 25–32% faster per epoch at the same BS;
+# val/total trajectory matches padded to within 0.3% by epoch 2 in the
+# 4-shard A/B (earlier epochs slightly better since packed eliminates
+# the bidirectional padding-leak documented in mamba_cls.py).
+#
+# Inherits ``ssm_cls/base.yaml`` (auto-loaded by train.py because
+# ``base.yaml`` lives next to this config). Notable overrides here:
+#   1. pool_head shape: state_head_output_dim=384 (=2*dim), state_head_hidden_layers=0,
+#      state_head_dropout=0.0 — UNBOTTLENECKED single Linear(384, 384), matching
+#      R&D `run1_unbottleneck_residinit.yaml`. output_head therefore reads 384-d
+#      instead of 128-d. The fine-tune triplet matches this shape so warm-start
+#      is structural. (Restored 2026-05-15 to match the R&D scaling-sweep
+#      headline; the prior 128/[192] bottleneck inadvertently shrank total
+#      params from 5.484 M → 5.369 M.)
+#   2. Loss weights re-tuned: d0=0.1, phi=0.1, z0=1.0, theta=1.0, qop=1.0
+#      — de-emphasise the two parameters where the SSM already dominates
+#      CKF; let the optimiser steer trunk capacity toward z0/theta/qop
+#      where the residual core-resolution gap lives.
+#   3. GradientLoggerCallback: log_output_head_per_dim=true with per-param
+#      slice mapping over the 30-dim Q7 readout, so spikes in
+#      grad/output_head/max_abs can be attributed to a specific output
+#      dim (and parameter) instead of the aggregate.
+#
+# Everything else (input_net, encoder backbone shape, optimizer,
+# schedule, data, BS) is inherited from ``ssm_cls/base.yaml`` verbatim.
+# =============================================================================
+trainer:
+  # BlockBatchSampler partitions blocks across ranks itself.  Lightning's
+  # default (true) would wrap it in a DistributedSamplerWrapper and shard it a
+  # SECOND time: each rank would see len(sampler)//world_size batches and one
+  # epoch would cover 1/world_size of the training set.  The DataModule raises
+  # if this is left on under DDP.
+  use_distributed_sampler: false
+  devices: [0]
+  logger:
+    init_args:
+      name: TRK-SSMCLS-ICLR-pretrain-10L-packed
+      project_name: ssm-track-regression-iclr
+  # Override the whole callbacks list to enable the new per-output-dim
+  # gradient logging in GradientLoggerCallback. All other callbacks copied
+  # verbatim from scaling/base.yaml.
+  callbacks:
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto   # v3c (compiled pure-torch) in train, v5pc (fused Triton) in eval
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 50
+        log_parameter_stats: false
+        log_layer_stats: true
+        log_output_head_per_dim: true
+        output_head_param_groups:
+          d0: [0, 7]
+          z0: [7, 14]
+          phi: [14, 16]
+          theta: [16, 23]
+          qop: [23, 30]
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 50
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+model:
+  model:
+    init_args:
+      # Unbottlenecked pool_head: single Linear(2*dim, 2*dim) — matches R&D
+      # `ssmcls/scaling/run1_unbottleneck_residinit.yaml`. Total params 5.484 M.
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          # chunk_size intentionally absent: KernelSwapCallback runs
+          # variant `auto`, which replaces every Mamba2 layer with
+          # Mamba2Short (pure-torch v3c in train, fused v5pc in eval).
+          # Mamba2Short is chunk-free — it stores chunk_size for API
+          # parity and never reads it (mamba_short.py:90,104).  The knob
+          # only bites on variant `v0` (stock mamba_ssm), which would
+          # then use the class default 256 instead of 16.
+          norm: RMSNorm
+          dropout: 0.0
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:
+              type: quantile
+              weight: 0.1
+              norm_min: -7.1     # was -2.5 (old core d0 window); |d0| max 7.069 mm
+              norm_max: 7.1
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            z0:
+              type: quantile
+              weight: 1.0
+              norm_min: -270.0   # was -200 (old core z0 window); |z0| max 268.8 mm
+              norm_max: 270.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            phi:
+              type: circular
+              weight: 0.1
+              beta: 0.01
+            theta:
+              type: quantile_eta
+              weight: 1.0
+              norm_min: -3.0
+              norm_max: 3.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+            qop:
+              type: quantile
+              weight: 1.0
+              # Measured over all 191,532,752 train tracks: q/p spans
+              # [-0.999942, +0.999865], symmetric — the gun fires mu-/mu+ 50/50,
+              # so norm_min/norm_max must be symmetric about 0.
+              # Set by the gun's pT range, which is [1, 110] GeV (particlegun
+              # config: energy_min 1.0, transverse true, log_uniform false), NOT
+              # [10, 110]: max|q/p| = 1/|p|min = 1/1.00, min|q/p| = 1/|p|max =
+              # 1/1107 = 0.0009.
+              #
+              # +-1.0 covers the support exactly, so nothing lands outside
+              # [-1, 1].  Trade-off: q/p ~ 1/p is heavily peaked, so the bulk is
+              # compressed — median |q/p| = 0.0088 maps to 0.009.  For more
+              # resolution on the bulk, +-0.25 covers 99.02% (0.98% / 1.88 M
+              # tracks outside, worst case 4x) and puts the median at 0.035.
+              # +-0.1 leaves 3.58% / 6.86 M tracks outside, reaching 10x — too
+              # aggressive for an unclipped pinball loss.
+              norm_min: -1.0
+              norm_max: 1.0
+              quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+  # Peak LR for the headline 10-layer pretrain. Deeper / wider depth-sweep
+  # leaves under config/experimental/scaling/ scale this as
+  # 1/sqrt(depth_ratio).
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+# ---- Data -------------------------------------------------------------------
+# Only the path changes.  Flat store => the DataModule uses block sampling
+# automatically; batch_size / num_workers / prefetch_factor / packed_batches
+# / load_acts all stay at the ICLR base defaults, unchanged from the original.
+# Copy /eos -> /scratch first: scripts/copy_dataset.sh <eos_path> <this_path>
+data:
+  preprocessed_dir: /scratch/

@@ -1,0 +1,8 @@
+iter-3sigma RMSE, SSM/CKF
+dataset                      N_dm                     d0                     z0                    phi                  theta                    qop
+                                              SSM/CKF µm             SSM/CKF µm           SSM/CKF mrad           SSM/CKF mrad          SSM/CKF 1/GeV
+single_muon_uniform     3,491,208              1055/14.3               575/21.6             32.4/0.179             1.67/0.059      1.43e-03/2.24e-04
+
+SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed
+dataset                                d0                 z0                phi              theta                qop
+single_muon_uniform         1.39x / 6.43%     41.3x / 12.50%      8.15x / 8.56%      128x / 10.90%      8.39x / 5.32%

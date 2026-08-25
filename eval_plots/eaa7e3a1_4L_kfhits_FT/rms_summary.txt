@@ -1,0 +1,18 @@
+iter-3sigma RMSE, SSM/CKF
+dataset                      N_dm                     d0                     z0                    phi                  theta                    qop
+                                              SSM/CKF µm             SSM/CKF µm           SSM/CKF mrad           SSM/CKF mrad          SSM/CKF 1/GeV
+OWN_p200_core_kf_hits_finetune  6,591,752              12.7/65.7                193/188             0.709/2.11            0.852/0.802      3.73e-03/3.44e-03
+single_muon_100GeV         77,210              2115/13.8             68860/20.4             34.1/0.158              136/0.047         0.049/1.97e-04
+single_muon_10GeV          77,915              2134/19.7             70242/36.5             37.7/0.380              139/0.123         0.052/4.94e-04
+single_muon_2GeV           76,651              2149/46.0              75577/124              92.0/1.39              159/0.470         0.093/1.97e-03
+single_muon_uniform     3,491,385              2115/15.2             71471/23.4             35.7/0.200              139/0.065         0.050/2.47e-04
+ttbar                     115,817              2061/41.5             49013/75.7              64.1/1.25              164/0.511         0.101/2.13e-03
+
+SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed
+dataset                                d0                 z0                phi              theta                qop
+OWN_p200_core_kf_hits_finetune      7.97x / 4.24%     8.14x / 11.32%      6.06x / 6.95%      3.37x / 4.75%      1.45x / 4.14%
+single_muon_100GeV          1.01x / 0.26%     5.56x / 14.02%      6.44x / 5.46%     4.82x / 10.72%      1.92x / 4.16%
+single_muon_10GeV           1.01x / 0.28%     5.45x / 13.93%      5.06x / 4.65%     4.80x / 10.92%      1.85x / 4.35%
+single_muon_2GeV            1.02x / 0.33%     4.77x / 13.45%      2.52x / 2.38%     4.52x / 12.87%      1.78x / 4.86%
+single_muon_uniform         1.02x / 0.32%     5.41x / 13.89%      7.41x / 6.26%     4.89x / 11.34%      1.90x / 4.49%
+ttbar                       1.04x / 0.58%     5.48x / 12.89%      1.67x / 8.07%      3.33x / 9.02%      2.46x / 7.38%

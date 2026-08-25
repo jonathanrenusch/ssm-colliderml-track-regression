@@ -1,0 +1,84 @@
+
+=== p0_core_pretrain  (/eos/project/e/end-to-end-colliderml/data/arxiv_retraining/p0_core_pretrain) ===
+selection: primary=True hard_scatter=True pt>=0.5 |d0|<=2.5 |z0|<=200.0 dm=False kf_hits=False
+split  shards     events        tracks            hits  trk/evt hits/trk
+train     900    899,799    64,309,170     851,719,189     71.5    13.24
+val        50     49,983     3,569,141      47,263,357     71.4    13.24
+test       50     49,982     3,573,365      47,322,389     71.5    13.24
+all      1000    999,764    71,451,676     946,304,935     71.5    13.24
+pT bins [GeV]:        0.5-1         1-2         2-3         3-5         5-10       10-20       20-50       50-110     110-inf  
+  train tracks:      18,648,755  16,887,850   7,979,374   7,888,931   7,092,023   3,684,219   1,731,642     340,579      55,797
+  train frac [%]:         29.00       26.26       12.41       12.27       11.03        5.73        2.69        0.53        0.09
+|d0| bins [mm]:         0-0.03   0.03-0.1     0.1-0.3     0.3-1         1-2.5     2.5-inf  
+  train tracks:      54,164,293   3,364,711   2,896,880   2,648,054   1,235,232           0
+  train frac [%]:         84.22        5.23        4.50        4.12        1.92        0.00
+|z0| bins [mm]:         0-50       50-100     100-150     150-200     200-inf  
+  train frac [%]:         63.18       29.65        6.51        0.66        0.00
+eta bins:              -3--2       -2--1       -1-0         0-1         1-2         2-3    
+  train frac [%]:          9.83       17.20       22.99       22.97       17.18        9.82
+  mean pT (all) = 4.214 GeV ; median pT (median of per-shard medians) = 1.718 GeV
+  vertex_primary==1: 100.00% of tracks
+  nhits histogram (6..20): 6:924,055 7:801,660 8:803,614 9:896,099 10:2,649,369 11:5,645,165 12:11,080,645 13:15,536,253 14:14,448,431 15:9,572,107 16:5,304,755 17:2,405,148 18:927,892 19:329,303 20:127,180
+
+=== p0_core_kf_hits_pretrain  (/eos/project/e/end-to-end-colliderml/data/arxiv_retraining/p0_core_kf_hits_pretrain) ===
+selection: primary=True hard_scatter=True pt>=0.5 |d0|<=2.5 |z0|<=200.0 dm=True kf_hits=True
+split  shards     events        tracks            hits  trk/evt hits/trk
+train     900    899,765    50,842,922     666,318,817     56.5    13.11
+val        50     49,979     2,821,913      36,979,424     56.5    13.10
+test       50     49,982     2,824,949      37,017,765     56.5    13.10
+all      1000    999,726    56,489,784     740,316,006     56.5    13.11
+pT bins [GeV]:        0.5-1         1-2         2-3         3-5         5-10       10-20       20-50       50-110     110-inf  
+  train tracks:       8,101,194  15,620,065   7,455,583   7,416,753   6,713,208   3,512,682   1,650,290     320,609      52,538
+  train frac [%]:         15.93       30.72       14.66       14.59       13.20        6.91        3.25        0.63        0.10
+|d0| bins [mm]:         0-0.03   0.03-0.1     0.1-0.3     0.3-1         1-2.5     2.5-inf  
+  train tracks:      42,513,113   2,915,225   2,541,777   2,136,662     736,145           0
+  train frac [%]:         83.62        5.73        5.00        4.20        1.45        0.00
+|z0| bins [mm]:         0-50       50-100     100-150     150-200     200-inf  
+  train frac [%]:         63.21       29.65        6.50        0.65        0.00
+eta bins:              -3--2       -2--1       -1-0         0-1         1-2         2-3    
+  train frac [%]:          9.33       16.85       23.92       23.84       16.76        9.31
+  mean pT (all) = 4.922 GeV ; median pT (median of per-shard medians) = 2.181 GeV
+  vertex_primary==1: 100.00% of tracks
+  nhits histogram (6..20): 6:577,060 7:564,131 8:571,169 9:732,250 10:2,455,353 11:5,097,235 12:9,425,266 13:12,686,072 14:11,417,891 15:7,158,955 16:3,664,807 17:1,484,829 18:486,660 19:135,920 20:32,186
+
+=== p200_core_kf_matched_finetune  (/scratch/colliderml/arxiv_retraining/p200_core_kf_matched_finetune) ===
+selection: primary=True hard_scatter=False pt>=0.5 |d0|<=2.5 |z0|<=200.0 dm=True kf_hits=False
+split  shards     events        tracks            hits  trk/evt hits/trk
+train     900     90,000   118,367,570   1,543,617,299   1315.2    13.04
+val        50      5,000     6,570,184      85,684,330   1314.0    13.04
+test       50      5,000     6,591,752      85,955,325   1318.4    13.04
+all      1000    100,000   131,529,506   1,715,256,954   1315.3    13.04
+pT bins [GeV]:        0.5-1         1-2         2-3         3-5         5-10       10-20       20-50       50-110     110-inf  
+  train tracks:      50,056,745  52,722,458  10,157,494   3,726,650   1,137,765     370,426     159,781      31,199       5,052
+  train frac [%]:         42.29       44.54        8.58        3.15        0.96        0.31        0.13        0.03        0.00
+|d0| bins [mm]:         0-0.03   0.03-0.1     0.1-0.3     0.3-1         1-2.5     2.5-inf  
+  train tracks:     112,273,106   2,899,674   1,038,756   1,258,872     897,162           0
+  train frac [%]:         94.85        2.45        0.88        1.06        0.76        0.00
+|z0| bins [mm]:         0-50       50-100     100-150     150-200     200-inf  
+  train frac [%]:         63.24       29.62        6.48        0.66        0.00
+eta bins:              -3--2       -2--1       -1-0         0-1         1-2         2-3    
+  train frac [%]:         16.07       15.89       18.15       18.06       15.79       16.04
+  mean pT (all) = 1.450 GeV ; median pT (median of per-shard medians) = 1.083 GeV
+  vertex_primary==1: 4.05% of tracks
+  nhits histogram (6..20): 6:1,490,684 7:1,546,863 8:1,590,398 9:1,671,514 10:6,191,189 11:13,241,836 12:22,273,994 13:28,799,915 14:24,670,362 15:15,790,406 16:8,606,618 17:3,838,371 18:1,356,029 19:375,325 20:86,002
+
+=== p200_core_kf_hits_finetune  (/scratch/colliderml/arxiv_retraining/p200_core_kf_hits_finetune) ===
+selection: primary=True hard_scatter=False pt>=0.5 |d0|<=2.5 |z0|<=200.0 dm=True kf_hits=True
+split  shards     events        tracks            hits  trk/evt hits/trk
+train     900     90,000   118,367,532   1,517,642,698   1315.2    12.82
+val        50      5,000     6,570,182      84,242,353   1314.0    12.82
+test       50      5,000     6,591,752      84,506,829   1318.4    12.82
+all      1000    100,000   131,529,466   1,686,391,880   1315.3    12.82
+pT bins [GeV]:        0.5-1         1-2         2-3         3-5         5-10       10-20       20-50       50-110     110-inf  
+  train tracks:      50,056,739  52,722,434  10,157,489   3,726,650   1,137,764     370,424     159,781      31,199       5,052
+  train frac [%]:         42.29       44.54        8.58        3.15        0.96        0.31        0.13        0.03        0.00
+|d0| bins [mm]:         0-0.03   0.03-0.1     0.1-0.3     0.3-1         1-2.5     2.5-inf  
+  train tracks:     112,273,073   2,899,671   1,038,756   1,258,872     897,160           0
+  train frac [%]:         94.85        2.45        0.88        1.06        0.76        0.00
+|z0| bins [mm]:         0-50       50-100     100-150     150-200     200-inf  
+  train frac [%]:         63.24       29.62        6.48        0.66        0.00
+eta bins:              -3--2       -2--1       -1-0         0-1         1-2         2-3    
+  train frac [%]:         16.07       15.89       18.15       18.06       15.79       16.04
+  mean pT (all) = 1.450 GeV ; median pT (median of per-shard medians) = 1.083 GeV
+  vertex_primary==1: 4.05% of tracks
+  nhits histogram (6..20): 6:991,059 7:1,314,942 8:1,476,771 9:2,420,933 10:8,184,419 11:16,345,764 12:24,705,866 13:28,183,645 14:22,679,529 15:13,850,744 16:7,171,518 17:2,925,959 18:968,906 19:255,689 20:53,722
