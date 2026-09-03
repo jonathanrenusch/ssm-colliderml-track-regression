@@ -1,4 +1,15 @@
-# BUG REPORT: ACTS-pipeline KF baseline is miscalibrated — switch all paper plots/values to the production `truth_tracks` reference
+# BUG REPORT: do NOT use the pipeline's ad-hoc KF as a baseline — use the `truth_tracks` shipped with the data
+
+**TL;DR / instruction (final, 2026-09-03 evening):** the in-pipeline ACTS KF refit is not
+calibration-grade even after the hit-ordering fix (Addendum 2): at ~full efficiency it is still
+1.35–3.18× worse than the production truth-KF in resolution (θ 3.2×, z0 2.0×). **Drop it as a
+baseline entirely.** Every paper figure and number references the truth-tracking-KF tracks
+shipped WITH the datasets (`truth_tracks` parquet / `truth_kf_reco.npy` side-cars) — these are
+properly calibrated (fitted upstream on the real digitized measurements and covariances) and the
+SSM sits at 0.96–1.00× of them under the ACTS estimator. The ad-hoc refit may appear at most as
+an appendix curve labelled "ACTS KF refit (as configured in the validation pipeline)" with the
+calibration caveat. Evidence plot (time-fixed pipeline KF, full statistics — all curves at
+188–200 k tracks): `eval_plots/paper_plots/acts_kf_check/uniform_kf_calibration_check.pdf`.
 
 **Date:** 2026-09-03 · **Repo:** `/shared/tracking/ssm-colliderml-track-regression`, branch `v2_campaign` (pull first).
 **Full documentation:** CLAUDE.md §4.29 · **Evidence plot:** `eval_plots/paper_plots/acts_kf_check/uniform_kf_calibration_check.pdf`
