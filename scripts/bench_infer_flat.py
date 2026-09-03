@@ -411,7 +411,11 @@ def main() -> None:
         "kernel variant": used,
         "matmul precision": args.matmul_precision + (" (strict fp32)" if args.matmul_precision == "highest" else " (TF32 linears)"),
         "batch size": args.batch_size,
-        "seed mode": "GPU (in timed loop)" if args.gpu_seed else ("CPU collate (+residuals)" if args.seed_residuals else "CPU collate"),
+        "seed mode": ("GPU (in timed loop)" if args.gpu_seed
+                      else "CPU collate (+residuals)" if args.seed_residuals
+                      else "GPU (auto, in model forward)"
+                      if batches[0]["hit_features"].shape[-1] < getattr(model, "input_dim", 0)
+                      else "none (features complete)"),
     })
 
 
