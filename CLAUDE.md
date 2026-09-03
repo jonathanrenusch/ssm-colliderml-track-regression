@@ -1630,6 +1630,33 @@ with the v2 schema break: `make_acts_compat_parquet.py` shims nested particle_id
 to the Release-1 layout the pyacts converter expects). Official ttbar numbers (both models, 237.7 k
 tracks): SSM matched 100.0 % vs ACTS-KF 74.6 %, Gaussian σ ratios 0.83–0.92 on all five params.
 
+### 4.29 The pipeline's ad-hoc ACTS KF is MISCALIBRATED (2026-09-03, user suspicion confirmed)
+
+Three-way check on uniform muons (200 k events, common subset 143 k tracks, identical residuals
++ identical ACTS scipy-Gaussian estimator + identical windows; offline estimator validated
+against the writer's own reswidth curves — overlay exact):
+`eval_plots/paper_plots/acts_kf_check/uniform_kf_calibration_check.pdf` + scratch `acts_kf_check.py`.
+
+| σ (integrated) | SSM | pipeline KF | production truth-KF | pipe/prod | SSM/prod |
+|---|---|---|---|---|---|
+| d0 [µm] | 15.0 | 19.4 | 15.3 | 1.27 | 0.98 |
+| z0 [µm] | 23.4 | 44.7 | 23.4 | **1.91** | 1.00 |
+| φ [mrad] | 0.294 | 0.356 | 0.299 | 1.19 | 0.99 |
+| θ [mrad] | 0.115 | 0.158 | 0.115 | 1.37 | 1.00 |
+| q/p [GeV⁻¹] | 2.71e-4 | 3.28e-4 | 2.71e-4 | 1.21 | 1.00 |
+
+Structure: θ excess is barrel-peaked (3.2× at η=0 → 1.2 forward), z0 has two degenerate-fit
+spikes at |η|≈0.4 (20–30×) — the longitudinal/strip-v measurement model; d0/φ/q/p flat ~1.2×.
+Mechanism: the Release-1 converter never receives the v2 per-cluster variances
+(`var_loc0/var_loc1` are not in its hitSchema) and re-derives local coords + covariances from
+the shimmed GLOBAL positions with internal defaults, while the production `truth_tracks` were
+fitted on the real digitized measurements. Its truth-ESTIMATED seeding also only fits 72–75 %.
+**Paper rule: quote SSM vs the PRODUCTION truth-KF (0.98–1.00 under the ACTS estimator —
+consistent with all campaign tables); do NOT sell the 0.83–0.92 ratios vs the in-pipeline KF
+as "beats the ACTS KF" — label that baseline "ACTS KF refit as configured in-pipeline" and
+report the calibration caveat to the ColliderML/pyacts producers (converter should ingest the
+digitized loc/var columns).**
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`
