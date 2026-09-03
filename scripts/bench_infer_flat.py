@@ -357,7 +357,20 @@ def main() -> None:
                     help="capture the forward in a CUDA graph (static shapes via dummy-track "
                          "padding) and time buffer-copy + replay — the small-batch launch-gap killer. "
                          "Incompatible with TRK_SSD_BUCKET16 (data-dependent split).")
+    ap.add_argument("--no-kernel-switches", action="store_true",
+                    help="Disable the default-on inference kernel switches "
+                         "(TRK_SSD_BUCKET16, TRK_COMPILE_FRONTEND). Both are exact "
+                         "(parity-tested); explicit env values always win.")
     args = ap.parse_args()
+
+    # Kernel switches ON BY DEFAULT for this benchmark (repo-wide defaults are
+    # unchanged -- this is the deployment tool). setdefault: an explicitly set
+    # env var (incl. "0") wins; --no-kernel-switches turns both off; BUCKET16 is
+    # skipped under --cuda-graph (its device-sync split breaks graph capture).
+    if not args.no_kernel_switches:
+        os.environ.setdefault("TRK_COMPILE_FRONTEND", "1")
+        if not args.cuda_graph:
+            os.environ.setdefault("TRK_SSD_BUCKET16", "1")
     if args.cuda_graph and os.environ.get("TRK_SSD_BUCKET16") == "1":
         sys.exit("[bench] --cuda-graph is incompatible with TRK_SSD_BUCKET16=1 (device-sync split)")
 
@@ -411,6 +424,8 @@ def main() -> None:
         "kernel variant": used,
         "matmul precision": args.matmul_precision + (" (strict fp32)" if args.matmul_precision == "highest" else " (TF32 linears)"),
         "batch size": args.batch_size,
+        "kernel switches": f"BUCKET16={os.environ.get('TRK_SSD_BUCKET16', '0')} "
+                           f"COMPILE_FRONTEND={os.environ.get('TRK_COMPILE_FRONTEND', '0')}",
         "seed mode": ("GPU (in timed loop)" if args.gpu_seed
                       else "CPU collate (+residuals)" if args.seed_residuals
                       else "GPU (auto, in model forward)"
