@@ -32,10 +32,13 @@ mmap, flat in dataset size.
 
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
 import numpy as np
+
+from track_regression.seed import seed_perigee, seed_residuals, compress_residuals
 import torch
 import torch.distributed as dist
 from torch import Tensor
@@ -144,15 +147,39 @@ class FlatTrackStore:
 # collate (vectorised; bit-identical to data.collate_tracks{,_packed})
 # ---------------------------------------------------------------------------
 
-def _pack(H, T, lens, targets, acts=None, dm=None, meta=None):
-    """Packed batch, built without a Python loop over the batch."""
+def _pack(H, T, lens, targets, acts=None, dm=None, meta=None, seed_residual_features=False,
+          hit_feature_columns=None):
+    """Packed batch, built without a Python loop over the batch.
+
+    ``seed_residual_features``: append (asinh du, asinh dv, s_helix) of every hit
+    relative to the track's seed helix as hit features 12-14 (P', CLAUDE.md §4.8).
+    ``hit_feature_columns``: optional column subset of the (up to 15) assembled
+    features fed to the model as ``hit_features`` (P'' residuals-only, §4.27);
+    the seed, ``hit_s`` and the innermost-hit anchors always use the full set.
+    """
     B = len(lens)
     lens64 = lens.astype(np.int64, copy=False)
     cu = np.zeros(B + 1, np.int32)
     cu[1:] = np.cumsum(lens64)
     starts = cu[:-1].astype(np.int64)
+    # ACTS-style three-pixel-point helix seed at the perigee (track_regression.seed),
+    # computed from x, y, z, volume_id only -- usable as `delta_anchor` for every
+    # head so the network predicts the correction to an analytic seed instead of
+    # the absolute parameter (CLAUDE.md §4.1, the precision-floor hypothesis).
+    max_len = int(lens64.max())
+    pos = np.arange(len(H), dtype=np.int64) - np.repeat(starts, lens64)
+    row = np.repeat(np.arange(B, dtype=np.int64), lens64)
+    xyz = np.zeros((B, max_len, 3), np.float64); vol = np.zeros((B, max_len), np.float64)
+    hv = np.zeros((B, max_len), bool)
+    xyz[row, pos] = H[:, :3]; vol[row, pos] = H[:, 7]; hv[row, pos] = True
+    seed64 = seed_perigee(xyz, hv, vol)
+    seed = seed64.astype(np.float32)
+    if seed_residual_features:
+        res = compress_residuals(seed_residuals(H[:, :3], seed64, row)).astype(np.float32)
+        H = np.concatenate([H, res], axis=1)
+    H_model = H if hit_feature_columns is None else H[:, hit_feature_columns]
     inputs = {
-        "hit_features": torch.from_numpy(H).unsqueeze(0),
+        "hit_features": torch.from_numpy(np.ascontiguousarray(H_model)).unsqueeze(0),
         "hit_s": torch.from_numpy(np.ascontiguousarray(H[:, 6])).unsqueeze(0),
         "hit_time": torch.from_numpy(T).unsqueeze(0),
         "seq_idx": torch.from_numpy(np.repeat(np.arange(B, dtype=np.int32), lens64)).unsqueeze(0),
@@ -166,6 +193,8 @@ def _pack(H, T, lens, targets, acts=None, dm=None, meta=None):
     tgt["track_valid"] = torch.ones(B, dtype=torch.bool)
     tgt["innermost_phi"] = torch.from_numpy(np.ascontiguousarray(H[starts, 4]))
     tgt["innermost_theta"] = torch.from_numpy(np.ascontiguousarray(H[starts, 5]))
+    for i, n in enumerate(TARGET_NAMES):
+        tgt[f"seed_{n}"] = torch.from_numpy(np.ascontiguousarray(seed[:, i]))
     if acts is not None:
         for i, n in enumerate(TARGET_NAMES):
             tgt[f"acts_reco_{n}"] = torch.from_numpy(np.ascontiguousarray(acts[:, i]))
@@ -249,15 +278,29 @@ def _gather_block(store: FlatTrackStore, i0: int, i1: int):
 # datasets
 # ---------------------------------------------------------------------------
 
+def _make_builder(packed: bool, seed_residual_features: bool, hit_feature_columns=None):
+    if hit_feature_columns is not None and not packed:
+        raise ValueError("hit_feature_columns requires packed_batches=True")
+    if seed_residual_features:
+        if not packed:
+            raise ValueError("seed_residual_features requires packed_batches=True")
+        return functools.partial(_pack, seed_residual_features=True,
+                                 hit_feature_columns=hit_feature_columns)
+    if hit_feature_columns is not None:
+        return functools.partial(_pack, hit_feature_columns=hit_feature_columns)
+    return _pack if packed else _pad
+
+
 class FlatBlockTrackDataset(Dataset):
     """Training dataset: one item *is* one batch, fetched as a contiguous slice.
 
     Pair with :class:`BlockBatchSampler` and ``batch_size=None``.
     """
 
-    def __init__(self, store: FlatTrackStore, packed: bool = True):
+    def __init__(self, store: FlatTrackStore, packed: bool = True, seed_residual_features: bool = False,
+                 hit_feature_columns=None):
         self.store = store
-        self._build = _pack if packed else _pad
+        self._build = _make_builder(packed, seed_residual_features, hit_feature_columns)
 
     def __len__(self) -> int:
         return self.store.n
@@ -276,9 +319,10 @@ class FlatTrackDataset(Dataset):
     DataLoader fetch a whole batch in one vectorised call.
     """
 
-    def __init__(self, store: FlatTrackStore, packed: bool = True):
+    def __init__(self, store: FlatTrackStore, packed: bool = True, seed_residual_features: bool = False,
+                 hit_feature_columns=None):
         self.store = store
-        self._build = _pack if packed else _pad
+        self._build = _make_builder(packed, seed_residual_features, hit_feature_columns)
 
     def __len__(self) -> int:
         return self.store.n
@@ -314,7 +358,17 @@ class BlockBatchSampler(Sampler):
                 rank, world_size = 0, 1
         self.rank, self.world = rank, world_size
         self._epoch = 0
-        self._per_rank = len(self._starts(0)) // self.world
+        # Number of full blocks that fit for EVERY jitter offset (the worst case
+        # is off = bs - 1).  The jitter used to change the block count by one
+        # between epochs (e.g. 5 320 vs 5 319 at n = 191.5 M, bs = 36 000) while
+        # ``__len__`` stayed at epoch 0's count; Lightning schedules validation
+        # at ``batch_idx + 1 == len(loader)``, so every epoch that came up one
+        # block short silently skipped validation (65 % of epochs in the
+        # 2026-08-25 sweep at bs 36 k, 15 % at bs 2 048).  Truncating to the
+        # worst-case count makes the yielded length identical in every epoch;
+        # the cost is at most one batch per epoch.
+        self._n_blocks = (self.n - self.bs + 1) // self.bs if self.jitter else self.n // self.bs
+        self._per_rank = self._n_blocks // self.world
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = int(epoch)
@@ -322,7 +376,7 @@ class BlockBatchSampler(Sampler):
     def _starts(self, epoch: int) -> np.ndarray:
         rng = np.random.default_rng(self.seed + epoch)
         off = int(rng.integers(0, self.bs)) if self.jitter else 0
-        starts = np.arange(off, self.n - self.bs + 1, self.bs, dtype=np.int64)
+        starts = np.arange(off, self.n - self.bs + 1, self.bs, dtype=np.int64)[: self._n_blocks]
         rng.shuffle(starts)
         return starts
 

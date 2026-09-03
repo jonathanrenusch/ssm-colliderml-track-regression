@@ -214,3 +214,52 @@ def test_capped_store_rows_come_from_the_right_parts(flat_store):
     _, tgt = ds.__getitems__(np.arange(int(cap.counts[0])))
     on_disk = np.load(flat_store / "part_0000" / "targets.npy")[: int(cap.counts[0])]
     assert np.allclose(tgt["d0"].numpy(), on_disk[:, 0])
+
+
+def test_block_sampler_yields_len_every_epoch():
+    """Regression test: the per-epoch jitter must not change the number of
+    batches (Lightning validates at batch_idx + 1 == len, so a one-short epoch
+    silently skips validation)."""
+    from track_regression.flat_data import BlockBatchSampler
+    for n, bs in [(191_532_752, 36_000), (47_883_188, 36_000), (191_532_752, 2_048), (1_000_003, 7)]:
+        for world in (1, 2, 4):
+            for rank in range(world):
+                smp = BlockBatchSampler(n, bs, seed=42, jitter=True, rank=rank, world_size=world)
+                for ep in range(6):
+                    smp.set_epoch(ep)
+                    blocks = list(iter(smp))
+                    assert len(blocks) == len(smp), (n, bs, world, rank, ep, len(blocks), len(smp))
+                    assert all(0 <= a and b <= n and b - a == bs for a, b in blocks)
+
+
+def test_pack_hit_feature_columns_subset():
+    """P'' (CLAUDE.md §4.27): `hit_feature_columns` subsets only the model-facing
+    `hit_features`; seed anchors, hit_s and the innermost-hit anchors still come
+    from the full feature set."""
+    import numpy as np
+    from track_regression.flat_data import _pack
+
+    rng = np.random.default_rng(0)
+    lens = np.array([8, 10], np.int32)
+    n = int(lens.sum())
+    H = np.zeros((n, 12), np.float32)
+    # radially ordered hits on a rough line so the seed triplet exists (pixels = volume 16-18)
+    r = np.concatenate([np.linspace(30, 300, 8), np.linspace(30, 400, 10)]).astype(np.float32)
+    phi0 = np.repeat(rng.uniform(-np.pi, np.pi, 2), lens).astype(np.float32)
+    H[:, 0] = r * np.cos(phi0); H[:, 1] = r * np.sin(phi0); H[:, 2] = r * 0.3
+    H[:, 4] = np.arctan2(H[:, 1], H[:, 0]); H[:, 5] = 1.2
+    H[:, 6] = np.sqrt((H[:, :3] ** 2).sum(1))
+    H[:, 7] = np.where(r < 200, 17, 24)  # inner hits pixel-like
+    T = np.arange(n, dtype=np.float32)
+    targets = np.zeros((2, 5), np.float32)
+
+    cols = [7, 12, 13, 14]
+    full_in, full_tgt = _pack(H.copy(), T, lens, targets, seed_residual_features=True)
+    sub_in, sub_tgt = _pack(H.copy(), T, lens, targets, seed_residual_features=True,
+                            hit_feature_columns=cols)
+    assert sub_in["hit_features"].shape == (1, n, 4)
+    assert np.allclose(sub_in["hit_features"].numpy(),
+                       full_in["hit_features"].numpy()[:, :, cols])
+    assert np.allclose(sub_in["hit_s"].numpy(), full_in["hit_s"].numpy())
+    for k in ("seed_d0", "seed_qop", "innermost_phi"):
+        assert np.allclose(sub_tgt[k].numpy(), full_tgt[k].numpy())

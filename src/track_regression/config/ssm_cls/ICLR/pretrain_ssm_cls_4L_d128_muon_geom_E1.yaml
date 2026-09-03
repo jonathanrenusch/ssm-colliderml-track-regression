@@ -1,11 +1,12 @@
 # =============================================================================
-# E1 of CLAUDE.md §4 — the 09c54481 recipe re-run on the s-SORTED stores.
+# E1 of CLAUDE.md §4 — the 09c54481 recipe re-run on the rebuilt GEOMETRY-ordered stores.
 # =============================================================================
 # Identical to pretrain_ssm_cls_4L_d128_muon.yaml (the recipe of run 09c54481:
 # 4L / dim 128 / d_state 128, Muon-hybrid + WSD, 4 x 32 k global batch) except:
-#   * data.preprocessed_dir -> /scratch/colliderml/ICLR_retraining_ssort/...
-#     (hits ordered by s; the original ICLR_retraining stores are ordered by the
-#     broken tracker_hits.time — strips first — see CLAUDE.md §0.1)
+#   * data.preprocessed_dir -> /scratch/colliderml/ICLR_retraining_geom/...
+#     (hits in geometry order, event_id-joined; the original ICLR_retraining
+#     stores are ordered by the broken tracker_hits.time and 4 % mislabelled —
+#     see CLAUDE.md §0.1 / §0.4)
 #   * max_epochs 10 — the comparison against 09c54481 is made at equal epochs
 #     (its per-epoch val/total is in CLAUDE.md-referenced train_128.out), and
 #     10 epochs is enough to see whether the ordering was the limiter.
@@ -98,7 +99,7 @@ trainer:
   logger:
     class_path: track_regression._lib.comet_logger.MyCometLogger
     init_args:
-      name: TRK-SSMCLS-ICLR-E1-4L-d128-muon-bs32k-ssort
+      name: TRK-SSMCLS-ICLR-E1-4L-d128-muon-bs32k-geom
       project_name: ssm-track-regression-iclr
       offline_directory: logs/comet_offline
   callbacks:
@@ -244,7 +245,7 @@ model:
 
 data:
   # Copy /eos -> /scratch first: scripts/copy_dataset.sh <eos_path> <this_path>
-  preprocessed_dir: /scratch/colliderml/ICLR_retraining_ssort/single_muon_uniform
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform
   load_acts: true          # val/test only; the train store never loads it
   batch_size: 32000        # PER DEVICE — global batch is 32000 x n_gpu
   num_workers: 8

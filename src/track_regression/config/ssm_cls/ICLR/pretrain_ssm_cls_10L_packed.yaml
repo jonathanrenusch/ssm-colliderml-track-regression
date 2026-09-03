@@ -206,4 +206,4 @@ model:
 # / load_acts all stay at the ICLR base defaults, unchanged from the original.
 # Copy /eos -> /scratch first: scripts/copy_dataset.sh <eos_path> <this_path>
 data:
-  preprocessed_dir: /scratch/
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1/§0.4)

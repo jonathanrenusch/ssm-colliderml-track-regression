@@ -1,0 +1,72 @@
+# =============================================================================
+# SWEEP 3 — H' = H + absolute q/p head.  NEW REFERENCE; bs 36k, OneCycle, 20 epochs (~14 h).
+# Question: q/p -> <= 1.5x the truth-KF in every domain (H: 2.1-2.9x)?  Reads against H.
+# Common to all sweep-3 runs: 4L/128/ds64, seed anchors on d0/z0/phi/theta,
+# ABSOLUTE q/p head (the anchored q/p head of G/H was 2-5x worse than an
+# absolute one, CLAUDE.md §4.5 reading 2), Fourier scales 2^-10..2^5, Lion,
+# geometry-ordered store.  Launched one process per GPU (launch_sess3.sh).
+# =============================================================================
+trainer:
+  devices: [1]             # documentary; the launcher pins CUDA_VISIBLE_DEVICES and passes --trainer.devices 1
+  max_epochs: 20
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW3-Hp-4L-ds64-lion-cosine-bs36k-anchor-fourier10-absqop
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: Lion
+  lrs_config:                 # legacy recipe, sqrt-scaled LR for the batch size
+    initial: 4.4e-05
+    max: 2.2e-04
+    end: 4.4e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+  model:
+    init_args:
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      fourier_scales: [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 4
+          dim: 128
+          d_state: 64
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile, weight: 0.1, norm_min: -0.4,   norm_max: 0.4,   delta_anchor: seed_d0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile, weight: 1.0, norm_min: -3.5,   norm_max: 3.5,   delta_anchor: seed_z0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: circular, weight: 0.1, beta: 0.01,                         delta_anchor: seed_phi}
+            theta: {type: quantile, weight: 1.0, norm_min: -0.01,  norm_max: 0.01,  delta_anchor: seed_theta, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile, weight: 1.0, norm_min: -1.0,   norm_max: 1.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform
+  batch_size: 36000
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  load_acts: true
+  max_val_tracks: 1000000

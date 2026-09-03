@@ -605,10 +605,15 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         B = cu.shape[0] - 1
         total_L = x.shape[1]
         D = x.shape[2]
-        if int(cu[-1].item()) != total_L:
-            raise ValueError(
-                f"cu_seqlens[-1]={int(cu[-1].item())} disagrees with total_L={total_L}"
-            )
+        # The consistency check is a host sync — skip it while a CUDA graph is
+        # being captured (capture forbids .item(); the capture harness pads the
+        # stream to a static total_L with dummy segments, so cu[-1] == total_L
+        # holds by construction there).
+        if not (x.is_cuda and torch.cuda.is_current_stream_capturing()):
+            if int(cu[-1].item()) != total_L:
+                raise ValueError(
+                    f"cu_seqlens[-1]={int(cu[-1].item())} disagrees with total_L={total_L}"
+                )
 
         device = x.device
         seg_arange = torch.arange(B, device=device, dtype=torch.long)
@@ -663,10 +668,10 @@ class BidirectionalMambaCLSEncoder(nn.Module):
         aug_seq_idx = all_seq_ids[inv_perm].unsqueeze(0).contiguous()  # (1, aug_total)
 
         # Augmented cu_seqlens (each segment grew by 2) for the segment-flip helper.
+        # Built with pure device ops (no host-scalar writes): ``aug_cu[0] = 0``
+        # is a synchronizing H2D memcpy that breaks CUDA-graph capture.
         seg_lens_aug = (cu[1:] - cu[:-1]) + 2  # (B,) long
-        aug_cu = torch.empty(B + 1, device=device, dtype=torch.long)
-        aug_cu[0] = 0
-        aug_cu[1:] = torch.cumsum(seg_lens_aug, dim=0)
+        aug_cu = torch.nn.functional.pad(torch.cumsum(seg_lens_aug, dim=0), (1, 0))
 
         flip_indices = _segment_flip_indices(aug_cu, aug_total)
 
@@ -684,7 +689,11 @@ class BidirectionalMambaCLSEncoder(nn.Module):
 
         cls_concat = torch.cat([cls_fwd_out, cls_bwd_out], dim=-1)  # (B, 2*D)
 
-        # Same DDP unused-parameter tie as in the padded path.
-        cls_concat = cls_concat + 0.0 * x_hits.float().sum()
+        # Same DDP unused-parameter tie as in the padded path — training only:
+        # the global sum makes every track's pooled vector NaN if ANY token in
+        # the packed stream is NaN (e.g. inert dummy-pad segments at inference),
+        # and at inference the autograd tie is meaningless anyway.
+        if self.training:
+            cls_concat = cls_concat + 0.0 * x_hits.float().sum()
 
         return x_hits, cls_concat

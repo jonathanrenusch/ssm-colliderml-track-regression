@@ -185,7 +185,7 @@ model:
 
 data:
   # Copy this from /eos to /scratch before training — /scratch reads far faster.
-  preprocessed_dir: /scratch/colliderml/ICLR_retraining/single_muon_uniform
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1/§0.4); ICLR_retraining is deprecated
   load_acts: true          # val/test only; the train store never loads it
   batch_size: 10000
   num_workers: 4

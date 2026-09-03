@@ -259,7 +259,12 @@ class QuantileLoss(nn.Module):
     def predict(self, raw: Tensor) -> Tensor:
         """Return median quantile mapped back to physical space."""
         ordered = self._ordered_from_raw(raw)
-        median_idx = (self.quantiles - 0.5).abs().argmin()
+        # cached as a Python int: the on-device argmin + tensor index is a host
+        # sync per call (and breaks CUDA-graph capture); quantiles are fixed
+        median_idx = getattr(self, "_median_idx", None)
+        if median_idx is None:
+            median_idx = int((self.quantiles - 0.5).abs().argmin())
+            self._median_idx = median_idx
         return _linear_denormalise(ordered[..., median_idx], self.norm_min, self.norm_max)
 
     def predict_quantiles(self, raw: Tensor) -> Tensor:
@@ -359,7 +364,10 @@ class EtaQuantileLoss(nn.Module):
     def predict(self, raw: Tensor) -> Tensor:
         """Return median quantile mapped back to θ space."""
         ordered = self._ordered_from_raw(raw)
-        median_idx = (self.quantiles - 0.5).abs().argmin()
+        median_idx = getattr(self, "_median_idx", None)
+        if median_idx is None:  # cached Python int — see QuantileLoss.predict
+            median_idx = int((self.quantiles - 0.5).abs().argmin())
+            self._median_idx = median_idx
         eta_pred = _linear_denormalise(ordered[..., median_idx], self.norm_min, self.norm_max)
         return _eta_to_theta(eta_pred)
 
@@ -950,6 +958,9 @@ class TrackParameterLoss(nn.Module):
         self.loss_aggregation = loss_aggregation
         self.losses = nn.ModuleDict()
         self._delta_anchors: dict[str, str] = {}
+        # Optional per-parameter scale: target = (t - anchor) / (|anchor| + eps).  Makes the
+        # head scale-free (q/p: the same relative precision at 1 and 100 GeV, CLAUDE.md §4.14).
+        self._scale_eps: dict[str, float] = {}
 
         for name in parameter_order:
             assert name in config, f"Missing loss config for parameter '{name}'"
@@ -959,6 +970,10 @@ class TrackParameterLoss(nn.Module):
             delta_anchor = cfg.pop("delta_anchor", None)
             if delta_anchor is not None:
                 self._delta_anchors[name] = delta_anchor
+            scale_eps = cfg.pop("scale_anchor_eps", None)
+            if scale_eps is not None:
+                assert delta_anchor is not None, f"{name}: scale_anchor_eps needs delta_anchor"
+                self._scale_eps[name] = float(scale_eps)
             assert loss_type in LOSS_REGISTRY, (
                 f"Unknown loss type '{loss_type}' for parameter '{name}'. "
                 f"Available: {list(LOSS_REGISTRY.keys())}"
@@ -1070,6 +1085,8 @@ class TrackParameterLoss(nn.Module):
                 # Wrap phi-like deltas to [-π, π]
                 if name == "phi":
                     t = torch.remainder(t + math.pi, 2.0 * math.pi) - math.pi
+                if name in self._scale_eps:
+                    t = t / (anchor.abs() + self._scale_eps[name])
 
             if t.numel() == 0:
                 losses[name] = torch.tensor(0.0, device=device)
@@ -1171,6 +1188,8 @@ class TrackParameterLoss(nn.Module):
                 t = t - anchor
                 if name == "phi":
                     t = torch.remainder(t + math.pi, 2.0 * math.pi) - math.pi
+                if name in self._scale_eps:
+                    t = t / (anchor.abs() + self._scale_eps[name])
 
             if t.numel() == 0:
                 continue
@@ -1232,6 +1251,8 @@ class TrackParameterLoss(nn.Module):
         if targets is not None and self._delta_anchors:
             for name, anchor_key in self._delta_anchors.items():
                 if anchor_key in targets:
+                    if name in self._scale_eps:
+                        preds[name] = preds[name] * (targets[anchor_key].abs() + self._scale_eps[name])
                     preds[name] = preds[name] + targets[anchor_key]
                     # Wrap phi to [-π, π]
                     if name == "phi":

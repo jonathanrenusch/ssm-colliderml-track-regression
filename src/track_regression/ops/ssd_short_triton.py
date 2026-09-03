@@ -29,6 +29,8 @@ valid causal triangle, so pad rows write zeros and contribute nothing.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -367,7 +369,7 @@ def _ssd_short_fwd_kernel2(
         triton.Config({"HPP": 2}, num_warps=4),
         triton.Config({"HPP": 2}, num_warps=2, maxnreg=168),
     ],
-    key=["H", "P", "N", "BL", "REVERSE"],
+    key=["H", "P", "N", "BL", "REVERSE", "DOT_TF32", "USE_IDX"],
 )
 @triton.jit
 def _ssd_short_fwd_kernel2p(
@@ -375,6 +377,7 @@ def _ssd_short_fwd_kernel2p(
     convw_ptr, convb_ptr, dtb_ptr, alog_ptr, d_ptr,
     cu_ptr,      # (B+1,) int64/int32 augmented cumulative segment ends
     out_ptr,     # (T_aug, HP)
+    idx_ptr,     # (n_programs,) int32 track ids when USE_IDX (length-bucketed launches); ignored otherwise
     DPROJ_TOT,
     H: tl.constexpr,
     P: tl.constexpr,
@@ -383,8 +386,12 @@ def _ssd_short_fwd_kernel2p(
     BL: tl.constexpr,
     REVERSE: tl.constexpr,
     HPP: tl.constexpr,  # heads per program; 0 means all H in one program
+    DOT_TF32: tl.constexpr,  # 1: tl.dot with TF32 inputs (opt-in, TRK_SSD_DOT_PRECISION=tf32); 0: IEEE fp32 (default)
+    USE_IDX: tl.constexpr,   # 1: program -> track via idx_ptr (opt-in, TRK_SSD_BUCKET16=1); 0: program == track
 ):
     pid_t = tl.program_id(0)
+    if USE_IDX:
+        pid_t = tl.load(idx_ptr + pid_t).to(tl.int32)
     HREAL: tl.constexpr = H if HPP == 0 else HPP
     h0 = tl.program_id(1) * HREAL
 
@@ -427,7 +434,10 @@ def _ssd_short_fwd_kernel2p(
     c_acc += tl.load(convb_ptr + HP + N + offs_n)[None, :]
     Bm = b_acc * tl.sigmoid(b_acc)
     Cm = c_acc * tl.sigmoid(c_acc)
-    G = tl.dot(Cm, tl.trans(Bm), input_precision="ieee")
+    if DOT_TF32:
+        G = tl.dot(Cm, tl.trans(Bm), input_precision="tf32")
+    else:
+        G = tl.dot(Cm, tl.trans(Bm), input_precision="ieee")
 
     causal = (offs_l[:, None] >= offs_l[None, :]) & lmask[:, None] & lmask[None, :]
 
@@ -465,9 +475,230 @@ def _ssd_short_fwd_kernel2p(
         M = Lmat * G
 
         xdt = x * dt[:, None]
-        Y = tl.dot(M, xdt, input_precision="ieee")
+        if DOT_TF32:
+            Y = tl.dot(M, xdt, input_precision="tf32")
+        else:
+            Y = tl.dot(M, xdt, input_precision="ieee")
         Y += tl.load(d_ptr + h) * x
         tl.store(out_row + h * P + offs_p[None, :], Y, mask=lmask[:, None])
+
+
+# ---------------------------------------------------------------------------
+# Kernel 2pm ("merged bidi", opt-in TRK_SSD_MERGED_BIDI=1): kernel 2p with the
+# two scan DIRECTIONS merged into ONE launch.  Grid axis 2 is the direction;
+# the reversal becomes a runtime predicate, the per-direction weights are
+# stacked (2, ...) tensors indexed by constexpr-sized offsets, and the packed
+# rows come from ONE fused in-projection GEMM (T, 2*DPROJ) — column offset
+# dir*DPROJ selects the direction's block.  Output is (2, T, HP).
+# ---------------------------------------------------------------------------
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({"HPP": 0}, num_warps=4),
+        triton.Config({"HPP": 0}, num_warps=8),
+        triton.Config({"HPP": 0}, num_warps=4, maxnreg=128),
+        triton.Config({"HPP": 0}, num_warps=8, maxnreg=96),
+        triton.Config({"HPP": 0}, num_warps=8, maxnreg=128),
+        triton.Config({"HPP": 4}, num_warps=2),
+        triton.Config({"HPP": 4}, num_warps=4),
+        triton.Config({"HPP": 4}, num_warps=4, maxnreg=128),
+        triton.Config({"HPP": 2}, num_warps=2),
+        triton.Config({"HPP": 2}, num_warps=4),
+        triton.Config({"HPP": 2}, num_warps=2, maxnreg=168),
+    ],
+    key=["H", "P", "N", "BL", "DOT_TF32", "USE_IDX"],
+)
+@triton.jit
+def _ssd_short_fwd_kernel2pm(
+    zxbcdt_ptr,  # (T_aug, 2*DPROJ) fused fwd|bwd projection rows
+    convw_ptr, convb_ptr, dtb_ptr, alog_ptr, d_ptr,  # each stacked (2, ...) contiguous
+    cu_ptr,      # (B+1,)
+    out_ptr,     # (2, T_aug, HP) contiguous
+    idx_ptr,     # (n_programs,) int32 track ids when USE_IDX; ignored otherwise
+    DPROJ,       # one direction's projection width (row stride is 2*DPROJ)
+    OUT_DELTA,   # T_aug * HP: direction stride of out
+    H: tl.constexpr,
+    P: tl.constexpr,
+    N: tl.constexpr,
+    DCONV: tl.constexpr,
+    BL: tl.constexpr,
+    HPP: tl.constexpr,
+    DOT_TF32: tl.constexpr,
+    USE_IDX: tl.constexpr,
+):
+    pid_t = tl.program_id(0)
+    if USE_IDX:
+        pid_t = tl.load(idx_ptr + pid_t).to(tl.int32)
+    HREAL: tl.constexpr = H if HPP == 0 else HPP
+    h0 = tl.program_id(1) * HREAL
+    dirn = tl.program_id(2)          # 0 = forward, 1 = backward (reversed)
+    rev = dirn == 1
+
+    HP: tl.constexpr = H * P
+    XBC_OFF: tl.constexpr = HP
+    DT_OFF: tl.constexpr = 2 * HP + 2 * N
+    CONVW_D: tl.constexpr = (HP + 2 * N) * DCONV   # one direction's conv-weight numel
+    CONVB_D: tl.constexpr = HP + 2 * N
+
+    zoff = dirn.to(tl.int64) * DPROJ
+    cw = convw_ptr + dirn * CONVW_D
+    cb = convb_ptr + dirn * CONVB_D
+    row_stride = 2 * DPROJ
+
+    base = tl.load(cu_ptr + pid_t).to(tl.int64)
+    nxt = tl.load(cu_ptr + pid_t + 1).to(tl.int64)
+    Lt = (nxt - base).to(tl.int32)
+    offs_l = tl.arange(0, BL)
+    lmask = offs_l < Lt
+    last = Lt - 1
+    offs_p = tl.arange(0, P)
+    offs_n = tl.arange(0, N)
+
+    b_acc = tl.zeros((BL, N), dtype=tl.float32)
+    c_acc = tl.zeros((BL, N), dtype=tl.float32)
+    for k in tl.static_range(DCONV):
+        row = offs_l - (DCONV - 1) + k
+        rmask = (row >= 0) & lmask
+        row = tl.where(rev & (row <= last), last - row, row)
+        roff = (base + row.to(tl.int64))[:, None] * row_stride + zoff
+        wb = tl.load(cw + (HP + offs_n) * DCONV + k)
+        wc = tl.load(cw + (HP + N + offs_n) * DCONV + k)
+        b_acc += wb[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+        c_acc += wc[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + N + offs_n)[None, :],
+                                       mask=rmask[:, None], other=0.0)
+    b_acc += tl.load(cb + HP + offs_n)[None, :]
+    c_acc += tl.load(cb + HP + N + offs_n)[None, :]
+    Bm = b_acc * tl.sigmoid(b_acc)
+    Cm = c_acc * tl.sigmoid(c_acc)
+    if DOT_TF32:
+        G = tl.dot(Cm, tl.trans(Bm), input_precision="tf32")
+    else:
+        G = tl.dot(Cm, tl.trans(Bm), input_precision="ieee")
+
+    causal = (offs_l[:, None] >= offs_l[None, :]) & lmask[:, None] & lmask[None, :]
+
+    dt_row = tl.where(rev & (offs_l <= last), last - offs_l, offs_l)
+    out_row = out_ptr + dirn.to(tl.int64) * OUT_DELTA + (base + dt_row.to(tl.int64))[:, None] * HP
+
+    for hh in tl.static_range(HREAL):
+        h = h0 + hh
+        x_acc = tl.zeros((BL, P), dtype=tl.float32)
+        for k in tl.static_range(DCONV):
+            row = offs_l - (DCONV - 1) + k
+            rmask = (row >= 0) & lmask
+            row = tl.where(rev & (row <= last), last - row, row)
+            roff = (base + row.to(tl.int64))[:, None] * row_stride + zoff
+            wx = tl.load(cw + (h * P + offs_p) * DCONV + k)
+            x_acc += wx[None, :] * tl.load(
+                zxbcdt_ptr + roff + (XBC_OFF + h * P + offs_p)[None, :],
+                mask=rmask[:, None], other=0.0)
+        x_acc += tl.load(cb + h * P + offs_p)[None, :]
+        x = x_acc * tl.sigmoid(x_acc)
+
+        dt_raw = tl.load(zxbcdt_ptr + (base + dt_row.to(tl.int64)) * row_stride + zoff + DT_OFF + h,
+                         mask=lmask, other=0.0)
+        v = dt_raw + tl.load(dtb_ptr + dirn * H + h)
+        dt = tl.where(v <= 20.0, tl.log(1.0 + tl.exp(v)), v)
+        dt = tl.where(lmask, dt, 0.0)
+
+        A = -tl.exp(tl.load(alog_ptr + dirn * H + h))
+        cumA = tl.cumsum(dt * A, 0)
+        seg = cumA[:, None] - cumA[None, :]
+        Lmat = tl.where(causal, tl.exp(seg), 0.0)
+        M = Lmat * G
+
+        xdt = x * dt[:, None]
+        if DOT_TF32:
+            Y = tl.dot(M, xdt, input_precision="tf32")
+        else:
+            Y = tl.dot(M, xdt, input_precision="ieee")
+        Y += tl.load(d_ptr + dirn * H + h) * x
+        tl.store(out_row + h * P + offs_p[None, :], Y, mask=lmask[:, None])
+
+
+@torch.library.custom_op("track_regression::ssd_short_fwd_packed_merged", mutates_args=())
+def ssd_short_fwd_packed_merged(
+    zx_fb: torch.Tensor,      # (T_aug, 2*dproj) fused fwd|bwd projection rows
+    conv_weight2: torch.Tensor,  # (2, conv_dim, K) stacked
+    conv_bias2: torch.Tensor,    # (2, conv_dim)
+    dt_bias2: torch.Tensor,      # (2, H)
+    A_log2: torch.Tensor,        # (2, H)
+    D2: torch.Tensor,            # (2, H)
+    cu_seqlens_aug: torch.Tensor,
+    nheads: int,
+    headdim: int,
+    d_state: int,
+) -> torch.Tensor:
+    """Both scan directions in ONE launch (TRK_SSD_MERGED_BIDI=1). Returns (2, T_aug, HP)."""
+    T, dproj2 = zx_fb.shape
+    H, P, N = nheads, headdim, d_state
+    dproj = dproj2 // 2
+    zx = zx_fb.contiguous()
+    cu = cu_seqlens_aug.to(device=zx.device, dtype=torch.int64).contiguous()
+    B = cu.shape[0] - 1
+    out = torch.empty(2, T, H * P, device=zx.device, dtype=zx.dtype)
+    dot_tf32 = _dot_tf32()
+    args = (zx, conv_weight2.contiguous(), conv_bias2.contiguous(), dt_bias2.contiguous(),
+            A_log2.contiguous(), D2.contiguous(), cu, out)
+    dconv = conv_weight2.shape[-1]
+    if _bucket16():
+        idx16, idx32 = _length_buckets(cu)
+        for idx, bl in ((idx16, 16), (idx32, 32)):
+            n = int(idx.shape[0])
+            if n == 0:
+                continue
+            grid = lambda META, n=n: (n, 1 if META["HPP"] == 0 else H // META["HPP"], 2)  # noqa: E731
+            _ssd_short_fwd_kernel2pm[grid](
+                *args, idx, dproj, T * H * P, H=H, P=P, N=N, DCONV=dconv, BL=bl,
+                DOT_TF32=dot_tf32, USE_IDX=1,
+            )
+        return out
+    grid = lambda META: (B, 1 if META["HPP"] == 0 else H // META["HPP"], 2)  # noqa: E731
+    _ssd_short_fwd_kernel2pm[grid](
+        *args, cu, dproj, T * H * P, H=H, P=P, N=N, DCONV=dconv, BL=32,
+        DOT_TF32=dot_tf32, USE_IDX=0,
+    )
+    return out
+
+
+@ssd_short_fwd_packed_merged.register_fake
+def _(zx_fb, conv_weight2, conv_bias2, dt_bias2, A_log2, D2, cu_seqlens_aug,
+      nheads, headdim, d_state):
+    T, _ = zx_fb.shape
+    return zx_fb.new_empty(2, T, nheads * headdim)
+
+
+# Opt-in inference variants (CLAUDE.md §4.16).  Defaults reproduce the IEEE fp32,
+# single-launch behaviour exactly; nothing changes unless the env vars are set.
+#   TRK_SSD_DOT_PRECISION=tf32  -> both tl.dot calls use TF32 inputs (fp32 accumulate)
+#   TRK_SSD_BUCKET16=1          -> tracks with augmented length <= 16 run in a BL=16 launch
+_BUCKET_CACHE: dict = {}
+
+
+def _dot_tf32() -> int:
+    return 1 if os.environ.get("TRK_SSD_DOT_PRECISION", "ieee").lower() == "tf32" else 0
+
+
+def _bucket16() -> bool:
+    return os.environ.get("TRK_SSD_BUCKET16", "0") == "1"
+
+
+def _length_buckets(cu: torch.Tensor):
+    """(idx16, idx32) int32 track ids for the two BL launches; cached per cu tensor
+    so the data-dependent split (one device sync) happens once per forward."""
+    key = (cu.data_ptr(), cu.shape[0])
+    hit = _BUCKET_CACHE.get(key)
+    if hit is not None and hit[0] is cu:
+        return hit[1], hit[2]
+    lens = cu[1:] - cu[:-1]
+    idx16 = torch.nonzero(lens <= 16, as_tuple=False).squeeze(1).to(torch.int32)
+    idx32 = torch.nonzero(lens > 16, as_tuple=False).squeeze(1).to(torch.int32)
+    if len(_BUCKET_CACHE) > 64:
+        _BUCKET_CACHE.clear()
+    _BUCKET_CACHE[key] = (cu, idx16, idx32)
+    return idx16, idx32
 
 
 @torch.library.custom_op("track_regression::ssd_short_fwd_packed", mutates_args=())
@@ -492,11 +723,24 @@ def ssd_short_fwd_packed(
     cu = cu_seqlens_aug.to(device=zx.device, dtype=torch.int64).contiguous()
     B = cu.shape[0] - 1
     out = torch.empty(T, H * P, device=zx.device, dtype=zx.dtype)
+    dot_tf32 = _dot_tf32()
+    args = (zx, w, conv_bias.contiguous(), dt_bias.contiguous(), A_log.contiguous(), D.contiguous(), cu, out)
+    if _bucket16():
+        idx16, idx32 = _length_buckets(cu)
+        for idx, bl in ((idx16, 16), (idx32, 32)):
+            n = int(idx.shape[0])
+            if n == 0:
+                continue
+            grid = lambda META, n=n: (n, 1 if META["HPP"] == 0 else H // META["HPP"])  # noqa: E731
+            _ssd_short_fwd_kernel2p[grid](
+                *args, idx, dproj, H=H, P=P, N=N, DCONV=w.shape[-1], BL=bl, REVERSE=reverse,
+                DOT_TF32=dot_tf32, USE_IDX=1,
+            )
+        return out
     grid = lambda META: (B, 1 if META["HPP"] == 0 else H // META["HPP"])  # noqa: E731
     _ssd_short_fwd_kernel2p[grid](
-        zx, w, conv_bias.contiguous(), dt_bias.contiguous(),
-        A_log.contiguous(), D.contiguous(), cu, out,
-        dproj, H=H, P=P, N=N, DCONV=w.shape[-1], BL=32, REVERSE=reverse,
+        *args, cu, dproj, H=H, P=P, N=N, DCONV=w.shape[-1], BL=32, REVERSE=reverse,
+        DOT_TF32=dot_tf32, USE_IDX=0,
     )
     return out
 
@@ -551,18 +795,20 @@ def gated_rmsnorm(y: torch.Tensor, z_rows: torch.Tensor, weight: torch.Tensor,
                   eps: float) -> torch.Tensor:
     """out = RMSNorm(y * silu(z)) * weight, rowwise over the last dim.
 
-    ``z_rows`` is a CONTIGUOUS (R, K) tensor whose first DSSM columns are z
-    — pass ``zxbcdt.view(R, d_in_proj)`` directly (z is its leading slice),
-    so no slice copy is ever materialised.
+    ``z_rows`` is a (R, K) tensor whose first DSSM columns are z — pass
+    ``zxbcdt.view(R, d_in_proj)`` directly (z is its leading slice), so no
+    slice copy is ever materialised.  A column-sliced VIEW with unit inner
+    stride is also accepted (merged-bidi path): the row stride is passed to
+    the kernel and the view's storage offset rides on ``data_ptr``.
     """
     d = y.shape[-1]
-    assert y.is_contiguous() and z_rows.is_contiguous()
+    assert y.is_contiguous() and z_rows.stride(-1) == 1
     y2 = y.view(-1, d)
     assert z_rows.shape[0] == y2.shape[0]
     out = torch.empty_like(y2)
     _gated_rmsnorm_kernel[(y2.shape[0],)](
         y2, z_rows, weight.contiguous(), out,
-        z_rows.shape[1], eps, DSSM=d, DBLK=triton.next_power_of_2(d),
+        z_rows.stride(0), eps, DSSM=d, DBLK=triton.next_power_of_2(d),
     )
     return out.view_as(y)
 

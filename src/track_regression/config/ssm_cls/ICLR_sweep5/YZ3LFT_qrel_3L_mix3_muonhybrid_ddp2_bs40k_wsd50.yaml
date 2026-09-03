@@ -1,0 +1,84 @@
+# =============================================================================
+# ROUND 6 (2026-08-31) — YZ-3L-FT = DDP 2xH100 Muon-hybrid fine-tune of YZ-3L on the full mix (bs 2x20k, WSD, 50 epochs)
+# the user's plan: close the last <= 3 % (ttbar q/p 1.03) on the fastest-inference model; launch with CUDA_VISIBLE_DEVICES=2,3 --trainer.devices 2 --model.pretrained_ckpt_path <YZ3L last.ckpt>
+# Recipe = YZ (P' inputs, even weights, phi quantile head, SCALE-FREE q/p, pure bs 2048 OneCycle);
+# data = the THREE-WAY mix: uniform muons (191.5 M) + log-pT muons 0.9-110 GeV (~190 M) + ttbar 1-110 GeV
+# (15.8 M), all v2 selection (3 T, |d0|<=7.1, |z0|<=270, true-time order).  CLAUDE.md §4.23.
+# =============================================================================
+trainer:
+  devices: [1]             # documentary; the launcher pins CUDA_VISIBLE_DEVICES and passes --trainer.devices 1
+  max_epochs: 50
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW6-YZ3LFT-qopRel-3L-mix3-muonhybrid-ddp2-bs40k-wsd50
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: MuonHybrid
+  lrs_config:                 # Muon-hybrid polish (Z-FT peaks), 5 % warm-up, 50 % cooldown over 50 epochs
+    schedule: wsd
+    initial: 2.0e-06
+    max: 2.0e-05
+    end: 1.0e-06
+    weight_decay: 0.02
+    betas: [0.9, 0.95]
+    muon_max: 6.0e-05
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+    pct_start: 0.05
+    decay_pct: 0.5
+    skip_scheduler: false
+  model:
+    init_args:
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      fourier_scales: [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      input_dim: 15
+      # 12 absolute features (base.yaml) + du_asinh, dv_asinh in [-8, 8], s_helix in [0, 4096] mm
+      norm_min: [-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3, -8.0, -8.0, 0.0]
+      norm_max: [1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3, 8.0, 8.0, 4096.0]
+      input_fields: [x, y, z, r, phi_hit, theta_hit, s, volume_id, layer_id, surface_id, detector, eta_hit, du_asinh, dv_asinh, s_helix]
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 3
+          dim: 128
+          d_state: 64
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile, weight: 1.0, norm_min: -0.4,   norm_max: 0.4,   delta_anchor: seed_d0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile, weight: 1.0, norm_min: -3.5,   norm_max: 3.5,   delta_anchor: seed_z0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: quantile, weight: 1.0, norm_min: -0.015, norm_max: 0.015, delta_anchor: seed_phi,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}   # even weights + pinball on the wrapped delta (|truth-seed| 99.99 % = 14 mrad); the Huber(beta=0.01) sin/cos head starved phi of gradient
+            theta: {type: quantile, weight: 1.0, norm_min: -0.01,  norm_max: 0.01,  delta_anchor: seed_theta, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile, weight: 1.0, norm_min: -2.0,   norm_max: 2.0,   delta_anchor: seed_qop, scale_anchor_eps: 0.02, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}   # scale-free q/p head (sweep-4 Y)
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_v2_mix3      # uniform + loguniform + ttbar (>= 395 M tracks)
+  batch_size: 20000   # per GPU; DDP x2 -> 40k effective
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  seed_residual_features: true      # P': flat_data._pack appends the 3 seed-residual hit features
+  load_acts: true
+  max_val_tracks: 1000000

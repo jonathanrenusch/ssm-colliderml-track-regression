@@ -22,7 +22,9 @@ import numpy as np
 KAPPA = 0.299792458
 
 # ODD solenoid field along +z.
-DEFAULT_BZ = 2.0
+DEFAULT_BZ = 2.0    # NOTE 2026-08-27: the drift_beamspot hits imply Bz = 3.0 T (seed.py, CLAUDE.md §4.8).
+                    # Every campaign-2 store so far has targets transported with 2 T; kept here so that
+                    # stores built during sweep 3 stay target-consistent.  Rebuild with 3 T = user decision.
 
 
 def truth_perigee(vx, vy, vz, px, py, pz, q, Bz: float = DEFAULT_BZ):

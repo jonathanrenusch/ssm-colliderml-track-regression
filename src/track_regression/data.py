@@ -774,6 +774,12 @@ class ColliderMLRegrDataModule(LightningDataModule):
         is spread evenly over the parts, so every input shard stays
         represented.  Validation is GPU-bound like training, so a 10 M-track
         val split costs real time per epoch for statistics you do not need.
+    max_train_tracks : int | None
+        Cap the number of TRAINING tracks (flat stores only), spread evenly over
+        the parts like the val/test caps.  For data-scaling / sufficiency runs:
+        train on a fixed fraction of the store while keeping every input shard
+        (and therefore the full pT / eta / d0 coverage) represented.  With the
+        block sampler an epoch then covers exactly the capped set.
     """
 
     def __init__(
@@ -790,8 +796,11 @@ class ColliderMLRegrDataModule(LightningDataModule):
         tail_upsample_threshold_mm: float = 0.0,
         tail_upsample_weight: float = 1.0,
         packed_batches: bool = False,
+        seed_residual_features: bool = False,
+        hit_feature_columns: list[int] | None = None,
         max_val_tracks: int | None = None,
         max_test_tracks: int | None = None,
+        max_train_tracks: int | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -812,8 +821,16 @@ class ColliderMLRegrDataModule(LightningDataModule):
         # — both consume cu_seqlens + seq_idx natively, skipping the
         # padded→unpad→varlen→pad round-trip on every forward.
         self.packed_batches = bool(packed_batches)
+        # P' (CLAUDE.md §4.8): append per-hit residuals to the seed helix as hit
+        # features 12-14 (flat stores + packed batches only; model input_dim = 15).
+        self.seed_residual_features = bool(seed_residual_features)
+        # P'' (CLAUDE.md §4.27): feed the model only this column subset of the
+        # assembled hit features (e.g. [7, 12, 13, 14] = volume + the 3 seed
+        # residuals); flat stores + packed batches only. model input_dim must match.
+        self.hit_feature_columns = list(hit_feature_columns) if hit_feature_columns else None
         self.max_val_tracks = max_val_tracks
         self.max_test_tracks = max_test_tracks
+        self.max_train_tracks = max_train_tracks
         self._collate_fn = collate_tracks_packed if self.packed_batches else collate_tracks
         # Tail upsampling (d0 based): when threshold_mm > 0 and weight != 1,
         # the train DataLoader uses a _StratifiedTailSampler that draws a
@@ -942,23 +959,28 @@ class ColliderMLRegrDataModule(LightningDataModule):
             # Training never uses ACTS data (the metrics are precomputed), so
             # skip those mmaps.
             self._train_ds = FlatBlockTrackDataset(
-                FlatTrackStore(self.preprocessed_dir / "train", load_acts=False),
-                packed=packed,
+                FlatTrackStore(self.preprocessed_dir / "train", load_acts=False,
+                               max_tracks=self.max_train_tracks),
+                packed=packed, seed_residual_features=self.seed_residual_features,
+                hit_feature_columns=self.hit_feature_columns,
             )
+            self._report_split("train", self._train_ds.store)
             self._train_sampler = BlockBatchSampler(
                 len(self._train_ds.store), self.batch_size, seed=self.flat_seed,
             )
             self._val_ds = FlatTrackDataset(
                 FlatTrackStore(self.preprocessed_dir / "val", load_acts=self.load_acts,
                                max_tracks=self.max_val_tracks),
-                packed=packed,
+                packed=packed, seed_residual_features=self.seed_residual_features,
+                hit_feature_columns=self.hit_feature_columns,
             )
             self._report_split("val", self._val_ds.store)
         if stage in (None, "test", "predict"):
             self._test_ds = FlatTrackDataset(
                 FlatTrackStore(self.preprocessed_dir / "test", load_acts=self.load_acts,
                                max_tracks=self.max_test_tracks),
-                packed=packed,
+                packed=packed, seed_residual_features=self.seed_residual_features,
+                hit_feature_columns=self.hit_feature_columns,
             )
             self._report_split("test", self._test_ds.store)
 

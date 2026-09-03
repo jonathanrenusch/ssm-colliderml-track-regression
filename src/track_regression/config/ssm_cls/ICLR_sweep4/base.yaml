@@ -1,0 +1,192 @@
+# =============================================================================
+# ICLR_sweep2/base.yaml — VERBATIM copy of ssm_cls/ICLR/base.yaml (2026-08-25).
+# train.py auto-loads the base.yaml that sits next to the config it is given,
+# so every leaf in this folder inherits this file.  Keep it in sync with
+# ssm_cls/ICLR/base.yaml; do not edit it per run — leaves override what changes.
+# =============================================================================
+# =============================================================================
+# ICLR campaign base — verbatim copy of ``ssm_cls/base.yaml``.
+# =============================================================================
+# train.py resolves ``base.yaml`` from the *config file's own directory*
+# (train.py:63).  A config in this folder with no base.yaml beside it would
+# silently fall back to a different base, so this copy has to exist and has to
+# stay in sync with ``ssm_cls/base.yaml``.  Diff the two before trusting a
+# comparison against a pre-ICLR run.
+#
+# ``pretrain_ssm_cls_4L_d64_muon.yaml`` is a narrow (dim=128) model and
+# therefore overrides the three width keys this base sets wide — ``dim``,
+# ``input_net_hidden_layers`` and ``output_head_hidden_layers`` — so that it
+# reproduces ``experimental/scaling/base.yaml`` without needing a second base.
+#
+# Auto-loaded by train.py for every config in this folder (see train.py:63).
+# Defaults here already reflect the study objective:
+#   - pool: ssm_cls                        (CLS-token pool at each scan terminus)
+#   - encoder_autocast_dtype: float32      (no bf16 in the selective scan)
+#   - dim: 192, input_net_hidden_layers: [192], output_head_hidden_layers: [256]
+#   - output_head_init_scale: 0.01         (stability fix from v2 core configs)
+#   - Encoder placeholder: BidirectionalMambaCLSEncoder at the base arch
+#     (10 L / dim=192 / d_state=32).
+# Study configs override only what they change — num_layers, d_state, dim for
+# the wider runs, and the per-run loss_module (4- vs 5-param).
+# =============================================================================
+
+seed_everything: 42
+
+# ---- Trainer ----------------------------------------------------------------
+
+trainer:
+  # BlockBatchSampler partitions blocks across ranks itself.  Lightning's
+  # default (true) would wrap it in a DistributedSamplerWrapper and shard it a
+  # SECOND time: each rank would see len(sampler)//world_size batches and one
+  # epoch would cover 1/world_size of the training set.  The DataModule raises
+  # if this is left on under DDP.
+  use_distributed_sampler: false
+  max_epochs: 50
+  num_sanity_val_steps: 1
+  accelerator: gpu
+  # Strict FP32 at the Lightning level. Encoder precision is controlled
+  # separately via model.model.init_args.encoder_autocast_dtype (float32 here).
+  precision: 32-true
+  log_every_n_steps: 500
+  default_root_dir: logs
+  gradient_clip_val: 1.0
+  enable_progress_bar: true
+  deterministic: false
+  benchmark: true
+  # Reload the train DataLoader each epoch so set_epoch(current_epoch) is
+  # called before workers are forked — required for streaming datasets.
+  reload_dataloaders_every_n_epochs: 1
+
+  logger:
+    class_path: track_regression._lib.comet_logger.MyCometLogger
+    init_args:
+      name: TRK-SSMCLS-ICLR-base
+      project_name: ssm-track-regression-iclr
+      offline_directory: logs/comet_offline
+
+  callbacks:
+    - class_path: track_regression._lib.callbacks.InferenceTimer
+    # Kernel-campaign default (2026-07-09): v3c (compiled pure-torch
+    # quadratic dual, exact autograd) while training; v5pc (fused packed
+    # Triton kernels) for validation/test/predict. See CLAUDE.md +
+    # docs/perf/OPTIMIZATION_LOG.md. Remove this entry to run the stock
+    # mamba_ssm kernels (v0).
+    - class_path: track_regression.callbacks.KernelSwapCallback
+      init_args:
+        variant: auto
+    - class_path: track_regression._lib.callbacks.GradientLoggerCallback
+      init_args:
+        log_every_n_steps: 500
+        log_parameter_stats: false
+    - class_path: track_regression.callbacks.MinimalGpuMonitor
+      init_args:
+        log_every_n_steps: 500
+    - class_path: track_regression._lib.callbacks.SaveConfig
+    - class_path: track_regression._lib.callbacks.Checkpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        verbose: true
+    - class_path: track_regression.callbacks.RegressionPredictionWriter
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 500
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/total
+        patience: 50
+        min_delta: 0.0
+        mode: min
+        verbose: true
+        check_on_train_epoch_end: false
+
+# ---- Model ------------------------------------------------------------------
+
+model:
+  train_metrics_every_n_steps: 500
+  model:
+    class_path: track_regression.model.TrackParameterRegressor
+    init_args:
+      input_dim: 12
+      dim: 192
+      pool: ssm_cls
+      encoder_autocast_dtype: float32
+      # Final output head (combines the (B, 2·dim) CLS concat → targets).
+      output_head_hidden_layers: [256]
+      output_head_dropout: 0.0
+      output_head_activation: SiLU
+      output_head_init_scale: 0.01
+      # Input embedding network
+      input_net_hidden_layers: [192]
+      input_net_dropout: 0.0
+      input_net_activation: SiLU
+      fourier_scales: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      fourier_base: 2
+      # Min-max normalisation bounds (per-hit feature). Raw input features —
+      # regression-target normalisation lives in the per-parameter loss config.
+      norm_min: [-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3]
+      norm_max: [1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3]
+      input_fields:
+        - x
+        - y
+        - z
+        - r
+        - phi_hit
+        - theta_hit
+        - s
+        - volume_id
+        - layer_id
+        - surface_id
+        - detector
+        - eta_hit
+
+      # Encoder placeholder at the base arch (10 L / dim=192 / d_state=32).
+      # Scaling study configs override num_layers / d_state / dim.
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 32
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          # chunk_size intentionally absent: KernelSwapCallback runs
+          # variant `auto`, which replaces every Mamba2 layer with
+          # Mamba2Short (pure-torch v3c in train, fused v5pc in eval).
+          # Mamba2Short is chunk-free — it stores chunk_size for API
+          # parity and never reads it (mamba_short.py:90,104).  The knob
+          # only bites on variant `v0` (stock mamba_ssm), which would
+          # then use the class default 256 instead of 16.
+          norm: RMSNorm
+          dropout: 0.0
+          residual_depth_init: true
+
+      # loss_module is run-specific (4-param vs 5-param) and MUST be set in
+      # every study config. No placeholder here to avoid silent dict merges
+      # leaving a d0 entry in 4-param runs.
+
+  lrs_config:
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+
+  optimizer: Lion
+
+# ---- Data -------------------------------------------------------------------
+data:
+  packed_batches: true
+  preprocessed_dir: /scratch/colliderml/arxiv_retraining/p0_core_pretrain
+  batch_size: 2048
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  num_train_shards: -1
+  # Load ACTS KF predictions + DM mask on the val loader so val-time metrics
+  # compute ssm_precision_dm / ssm_iqr_dm / ssm_rms_dm on the DM subset.
+  load_acts: true

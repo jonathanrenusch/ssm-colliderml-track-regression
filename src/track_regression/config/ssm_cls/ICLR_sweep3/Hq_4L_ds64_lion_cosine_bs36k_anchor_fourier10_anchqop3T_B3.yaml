@@ -1,0 +1,71 @@
+# =============================================================================
+# SWEEP 3 — Hq = H' with the q/p head ANCHORED to the 3 T seed (the 2 T seed q/p was
+# biased x1.5, CLAUDE.md §4.8; G/H's anchored q/p verdict is therefore void).
+# 3 T uniform store; bs 36k; 20 epochs (~14 h).  Reads against H' (2 T targets —
+# high-pT comparison only) / later against a B3 H'.  Alternative fill-in for sess5:1.
+# 2026-08-28: loss weights made EVEN (all 1.0) and phi moved to an anchored quantile head (CLAUDE.md §4.14).
+# =============================================================================
+trainer:
+  devices: [1]             # documentary; the launcher pins CUDA_VISIBLE_DEVICES and passes --trainer.devices 1
+  max_epochs: 20
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW3-Hq-4L-ds64-lion-cosine-bs36k-anchor-fourier10-anchqop3T-B3
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: Lion
+  lrs_config:                 # legacy recipe, sqrt-scaled LR for the batch size
+    initial: 4.4e-05
+    max: 2.2e-04
+    end: 4.4e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+  model:
+    init_args:
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      fourier_scales: [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 4
+          dim: 128
+          d_state: 64
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile, weight: 1.0, norm_min: -0.4,   norm_max: 0.4,   delta_anchor: seed_d0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile, weight: 1.0, norm_min: -3.5,   norm_max: 3.5,   delta_anchor: seed_z0,    quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: quantile, weight: 1.0, norm_min: -0.015, norm_max: 0.015, delta_anchor: seed_phi,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}   # even weights + pinball on the wrapped delta (|truth-seed| 99.99 % = 14 mrad); the Huber(beta=0.01) sin/cos head starved phi of gradient
+            theta: {type: quantile, weight: 1.0, norm_min: -0.01,  norm_max: 0.01,  delta_anchor: seed_theta, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile, weight: 1.0, norm_min: -0.15,  norm_max: 0.15,  delta_anchor: seed_qop,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}   # 3 T seed: |truth - seed| 99.99 % = 0.13 e/GeV at 1-2 GeV, 0.09 overall (measured 2026-08-27)
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom_B3/single_muon_uniform
+  batch_size: 36000
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  load_acts: true
+  max_val_tracks: 1000000

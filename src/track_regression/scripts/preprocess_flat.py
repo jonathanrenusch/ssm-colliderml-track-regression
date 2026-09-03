@@ -20,7 +20,7 @@ behind a hard wall instead of removing bad tracks.
 
     <out>/<split>/part_XXXX/{hits,hit_times,offsets,lengths,targets,...}.npy
 
-Hits within a track are stored in ``--sort-key`` order (default ``s``); the
+Hits within a track are stored in ``--sort-key`` order (default ``geometry``); the
 ``hit_times`` sidecar is kept for diagnostics only.
 
 ``hits`` is contiguous per track, so a track is a slice and the legacy
@@ -93,7 +93,8 @@ def _rowid(off, n):
 # one input shard -> selected tracks
 # ---------------------------------------------------------------------------
 
-def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: bool):
+def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: bool,
+                 ttf: Path | None = None, shf: Path | None = None):
     """Return the selected tracks of one parquet shard, fully vectorised."""
     ptab = pq.read_table(pf, columns=[
         "event_id", "particle_id", "charge", "px", "py", "pz",
@@ -113,7 +114,7 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
     prim = _flat(ptab.column("primary"))[0].astype(bool)
     vprim = _flat(ptab.column("vertex_primary"))[0].astype(np.int32)
 
-    d0, z0, phi, theta, qop = truth_perigee(vx, vy, vz, px, py, pz, q)
+    d0, z0, phi, theta, qop = truth_perigee(vx, vy, vz, px, py, pz, q, Bz=float(sel.get("_bz", 2.0)))
     pt = np.hypot(px, py)
     with np.errstate(divide="ignore", invalid="ignore"):
         eta = -np.log(np.tan(np.clip(theta, 1e-8, np.pi - 1e-8) / 2.0))
@@ -124,6 +125,8 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
     if sel.get("hard_scatter"):
         base &= vprim == 1
     base &= pt >= sel["pt_min"]
+    if sel.get("pt_max") is not None:
+        base &= pt <= float(sel["pt_max"])
     base &= (eta >= sel["eta_min"]) & (eta <= sel["eta_max"])
     # d0/z0 windows are omitted by default (see module docstring); --apply-d0z0-windows
     # puts them back, e.g. to reproduce the legacy selection on new data.
@@ -132,9 +135,10 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
         base &= (z0 >= sel["z0_min"]) & (z0 <= sel["z0_max"])
 
     # ---- hits ----
+    need_tt = sel.get("_sort_key") == "true_time"
     htab = pq.read_table(hf, columns=[
         "event_id", "particle_ids", "x", "y", "z",
-        "volume_id", "layer_id", "surface_id", "time"])
+        "volume_id", "layer_id", "surface_id", "time"] + (["simhit_ids"] if need_tt else []))
     hx, h_off = _flat(htab.column("x"))
     n_hits = len(hx)
     if n_hits == 0:
@@ -169,6 +173,30 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
     inner = pc.list_flatten(htab.column("particle_ids"))     # list<uint64> per hit
     pair_pid, pair_off = _flat(inner)
     pair_hit = _rowid(pair_off, len(pair_pid))
+
+    # ---- ACTS reference order: tracker_simhits.true_time per (hit, particle) pair ----
+    # `simhit_ids` is aligned with `particle_ids` (one sim hit per contributing particle)
+    # and indexes the event's sim-hit list positionally (hit_sorting_study.truth_time_table).
+    pair_tt = None
+    if need_tt:
+        if shf is None:
+            raise FileNotFoundError(f"{hf}: --sort-key true_time needs the tracker_simhits table next to it")
+        sid_vals, sid_off = _flat(pc.list_flatten(htab.column("simhit_ids")))
+        if len(sid_vals) != len(pair_pid) or not np.array_equal(sid_off, pair_off):
+            raise RuntimeError(f"{hf.name}: particle_ids and simhit_ids are not aligned")
+        stab = pq.read_table(shf, columns=["event_id", "true_time"])
+        s_tt, s_off = _flat(stab.column("true_time"))
+        s_ev_ids = stab.column("event_id").to_numpy(zero_copy_only=False).astype(np.int64)
+        # hits-table row -> simhits-table row of the same event_id
+        s_order = np.argsort(s_ev_ids, kind="stable")
+        pos_s = np.clip(np.searchsorted(s_ev_ids[s_order], h_ev_ids), 0, len(s_ev_ids) - 1)
+        s_ok = s_ev_ids[s_order][pos_s] == h_ev_ids
+        h_row2s = np.where(s_ok, s_order[pos_s], -1)
+        srow = h_row2s[_rowid(h_off, n_hits)][pair_hit]           # simhits row per pair
+        sidx = sid_vals.astype(np.int64)
+        valid = (srow >= 0) & (sidx >= 0) & (sidx < np.diff(s_off)[np.clip(srow, 0, len(s_off) - 2)])
+        flat_idx = np.where(valid, s_off[np.clip(srow, 0, len(s_off) - 2)] + sidx, 0)
+        pair_tt = np.where(valid, s_tt[np.clip(flat_idx, 0, len(s_tt) - 1)].astype(np.float64), np.nan)
 
     # ---- match hits to particles on (event, particle_id) ----
     # A dense rank keeps the composite key inside int64 exactly.
@@ -239,6 +267,33 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
                 if nmaj / max(n_reco[tk], 1) > 0.75 and nmaj / (b - a) > 0.75:
                     acts_dm[pi] = True
 
+    # ---- truth-tracking KF (``truth_tracks`` table), matched the same way ----
+    # Done here, per shard, because event ids restart at 0 in every runs/<N>/
+    # directory, so a post-hoc (event_id, particle_id) join over a whole store
+    # is ambiguous (scripts/extract_truth_kf.py).  Written as the same
+    # ``truth_kf_reco.npy`` side-car that fast_rms_eval / kf_baselines read.
+    truth_kf = None
+    if augment_acts and ttf is not None:
+        ttab2 = pq.read_table(ttf, columns=["event_id", "d0", "z0", "phi", "theta", "qop",
+                                            "majority_particle_id"])
+        t_maj2, t_off2 = _flat(ttab2.column("majority_particle_id"))
+        truth_kf = np.full((n_part, 5), np.nan, np.float32)
+        if len(t_maj2):
+            t_row2 = _rowid(t_off2, len(t_maj2))
+            t_ev_ids2 = ttab2.column("event_id").to_numpy(zero_copy_only=False).astype(np.int64)
+            ev_to_local2 = {int(e): i for i, e in enumerate(ev_ids)}
+            t_ev2 = np.array([ev_to_local2.get(int(t_ev_ids2[r]), -1) for r in t_row2], np.int64)
+            tr2 = np.searchsorted(uniq, t_maj2)
+            tr_ok2 = (t_ev2 >= 0) & (tr2 < len(uniq)) & (uniq[np.clip(tr2, 0, len(uniq)-1)] == t_maj2)
+            t_key2 = np.where(tr_ok2, (t_ev2 << 32) | tr2.astype(np.int64), -1)
+            tpos2 = np.searchsorted(skey, t_key2)
+            tok2 = tr_ok2 & (tpos2 < len(skey))
+            tpos2_c = np.where(tok2, tpos2, 0)
+            tok2 &= skey[tpos2_c] == t_key2
+            tgt2 = order[tpos2_c[tok2]]
+            for j, name in enumerate(TARGET_NAMES):
+                truth_kf[tgt2, j] = _flat(ttab2.column(name))[0][tok2].astype(np.float32)
+
     if sel.get("require_acts_dm"):
         mask &= acts_dm if acts_dm is not None else False
     if sel.get("use_acts_hits_only"):
@@ -258,10 +313,17 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
     # packed collate/encoder consume the stored order verbatim, so this is THE
     # sequence order the model sees.
     keep = mask[pidx]
+    keep_idx = np.nonzero(ok)[0][keep]          # pair positions of the kept (hit, particle) pairs
     pk, hk = pidx[keep], hidx[keep]
-    sort_key = sel.get("_sort_key", "s")
+    sort_key = sel.get("_sort_key", "geometry")
     if sort_key == "time":
         o = np.lexsort((htime[hk], pk))
+    elif sort_key == "true_time":
+        tt = pair_tt[keep_idx]
+        n_nan = int(np.isnan(tt).sum())
+        if n_nan:
+            print(f"  [true_time] {n_nan} of {len(tt)} selected hits without a sim-hit time -> placed last", flush=True)
+        o = np.lexsort((np.where(np.isnan(tt), np.inf, tt), pk))
     elif sort_key == "s":
         o = np.lexsort((np.sqrt(hx ** 2 + hy ** 2 + hz ** 2)[hk], pk))
     elif sort_key == "geometry":
@@ -320,6 +382,8 @@ def select_shard(pf: Path, hf: Path, tf: Path | None, sel: dict, augment_acts: b
     if acts_reco is not None:
         out["acts_reco"] = acts_reco[sel_idx]
         out["acts_dm"] = acts_dm[sel_idx]
+    if truth_kf is not None:
+        out["truth_kf_reco"] = truth_kf[sel_idx]
     return out
 
 
@@ -335,9 +399,12 @@ def write_part(args):
         return m
     t0 = time.time()
     chunks, stats = [], dict(n_events=0, n_particles=0, n_raw_hits=0)
-    for pf, hf, tf in triples:
+    for pf, hf, tf, *rest in triples:
+        ttf = rest[0] if len(rest) > 0 else None
+        shf = rest[1] if len(rest) > 1 else None
         try:
-            c = select_shard(Path(pf), Path(hf), Path(tf) if tf else None, sel, augment_acts)
+            c = select_shard(Path(pf), Path(hf), Path(tf) if tf else None, sel, augment_acts,
+                             Path(ttf) if ttf else None, Path(shf) if shf else None)
         except Exception:
             return {"error": f"{pf}: {traceback.format_exc()}"}
         if c is None:
@@ -396,6 +463,10 @@ def write_part(args):
     if "acts_reco" in chunks[0]:
         np.save(part_dir / "acts_reco.npy", cat("acts_reco", np.float32))
         np.save(part_dir / "acts_dm.npy", cat("acts_dm", np.bool_))
+    if any("truth_kf_reco" in c for c in chunks):
+        for c in chunks:
+            c.setdefault("truth_kf_reco", np.full((len(c["lengths"]), 5), np.nan, np.float32))
+        np.save(part_dir / "truth_kf_reco.npy", cat("truth_kf_reco", np.float32))
     meta = dict(name=part_dir.name, n_tracks=int(n_tracks), n_hits=int(n_hits),
                 seconds=round(time.time() - t0, 1), **stats)
     json.dump(meta, open(part_dir / "meta.json", "w"))
@@ -417,7 +488,11 @@ def discover(root: Path):
             hf = next((root / "parquet" / "reco" / "tracker_hits").glob(f"*{tag}"), None)
             tf = next((root / "parquet" / "reco" / "tracks").glob(f"*{tag}"), None)
             if hf and tf:
-                out.append((str(pf), str(hf), str(tf)))
+                ttd = root / "parquet" / "reco" / "truth_tracks"
+                ttf = next(ttd.glob(f"*{tag}"), None) if ttd.is_dir() else None
+                shd = root / "parquet" / "truth" / "tracker_simhits"
+                shf = next(shd.glob(f"*{tag}"), None) if shd.is_dir() else None
+                out.append((str(pf), str(hf), str(tf), str(ttf) if ttf else None, str(shf) if shf else None))
         return out
     out = []
     runs = sorted((root / "runs").glob("*/"),
@@ -426,8 +501,11 @@ def discover(root: Path):
         for pf in sorted((rd / "particles").glob("*.parquet")):
             tag = pf.name.replace("particles_", "")
             hf, tf = rd / "tracker_hits" / f"tracker_hits_{tag}", rd / "tracks" / f"tracks_{tag}"
+            ttf = rd / "truth_tracks" / f"truth_tracks_{tag}"      # truth-tracking KF (new ttbar runs)
+            shf = rd / "tracker_simhits" / f"tracker_simhits_{tag}"  # sim hits (true_time for --sort-key true_time)
             if hf.exists() and tf.exists():
-                out.append((str(pf), str(hf), str(tf)))
+                out.append((str(pf), str(hf), str(tf), str(ttf) if ttf.exists() else None,
+                            str(shf) if shf.exists() else None))
     return out
 
 
@@ -456,17 +534,30 @@ def main():
     ap.add_argument("--limit-shards", type=int, default=-1)
     ap.add_argument("--apply-d0z0-windows", action="store_true",
                     help="re-apply the variant's d0/z0 windows (off by default)")
-    ap.add_argument("--sort-key", choices=("s", "geometry", "time"), default="s",
-                    help="per-track hit order stored on disk: 's' = sqrt(x^2+y^2+z^2) "
-                         "(default; the legacy radial ordering), 'geometry' = detector "
-                         "order (hit_sorting.geometry_keys, truth-free, matches ACTS "
-                         "truth-time order), 'time' = tracker_hits.time (broken on the "
-                         "drift_beamspot campaign)")
+    ap.add_argument("--sort-key", choices=("geometry", "s", "time", "true_time"), default="geometry",
+                    help="per-track hit order stored on disk: 'geometry' = detector order "
+                         "(default since 2026-08-25, user decision; hit_sorting.geometry_keys, "
+                         "truth-free, matches the ACTS truth-time order on ~100 %% of tracks), "
+                         "'s' = sqrt(x^2+y^2+z^2) from the origin (legacy radial ordering, "
+                         "wrong on 13-15 %% of drift_beamspot tracks at large |z0|), "
+                         "'time' = tracker_hits.time (broken on the drift_beamspot campaign)")
     ap.add_argument("--d0-window", type=float, default=None, help="override |d0| max [mm]")
+    ap.add_argument("--bz", type=float, default=2.0,
+                    help="solenoid field [T] for the vertex->perigee transport of the truth targets. The campaign-2 "
+                         "stores up to 2026-08-27 used 2.0; the hits imply 3.0 (CLAUDE.md §4.8)")
+    ap.add_argument("--pt-max", type=float, default=None,
+                    help="upper pT cut [GeV] (e.g. 110 for ttbar: test/train where the muon gun trains)")
+    ap.add_argument("--pt-min", type=float, default=None,
+                    help="override the selection's pt_min [GeV] (e.g. 1.0 for a ttbar eval store without the untrained < 1 GeV domain)")
     ap.add_argument("--z0-window", type=float, default=None, help="override |z0| max [mm]")
     a = ap.parse_args()
 
     sel = yaml.safe_load(open(a.selection_file))[a.selection_variant]
+    sel["_bz"] = float(a.bz)
+    if a.pt_min is not None:
+        sel["pt_min"] = float(a.pt_min)          # recorded in manifest/dataset_meta via `selection`
+    if a.pt_max is not None:
+        sel["pt_max"] = float(a.pt_max)
     sel = dict(sel)
     sel["hard_scatter"] = bool(a.hard_scatter)
     sel["max_hits"] = min(sel.get("max_hits", MAX_HITS_HARD), MAX_HITS_HARD)
@@ -539,7 +630,7 @@ def main():
         parts.sort(key=lambda m: m["name"])
         man = dict(layout="flat_csr", version=3, n_feat=N_HIT_FEATURES,
                    hit_feature_names=HIT_FEATURE_NAMES, target_names=TARGET_NAMES,
-                   shuffled_within_part=True, hit_sort_key=a.sort_key,
+                   shuffled_within_part=True, hit_sort_key=a.sort_key, bz=float(a.bz),
                    parts=[{k: p[k] for k in ("name", "n_tracks", "n_hits")} for p in parts],
                    n_tracks=sum(p["n_tracks"] for p in parts),
                    n_hits=sum(p["n_hits"] for p in parts))
@@ -548,7 +639,7 @@ def main():
     meta = dict(
         source=str(root), selection_variant=a.selection_variant, selection=sel,
         d0_z0_windows_applied=bool(a.apply_d0z0_windows), detector_rebuilt_from_volume_id=True,
-        hit_sort_key=a.sort_key,
+        hit_sort_key=a.sort_key, bz=float(a.bz),
         perigee_recomputed=True, seed=a.seed,
         splits={sp: dict(n_input_shards=len(split_idx[sp]),
                          n_tracks=sum(p["n_tracks"] for p in results[sp]),

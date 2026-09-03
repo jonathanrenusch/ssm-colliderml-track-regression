@@ -61,6 +61,7 @@ import math
 from contextlib import nullcontext
 from typing import Any, Literal
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from lion_pytorch import Lion
@@ -299,7 +300,9 @@ class TrackParameterRegressor(nn.Module):
         # Fourier encoding config
         self.fourier_scales = fourier_scales if fourier_scales is not None else [-3, -2, -1, 0, 1, 2, 3]
         self.fourier_base = fourier_base
-        fourier_dim = input_dim * 2 * len(self.fourier_scales)
+        # fourier_scales: [] disables the encoding (ablation): the input net then reads the
+        # min-max-normalised features directly.
+        fourier_dim = input_dim * 2 * len(self.fourier_scales) if self.fourier_scales else input_dim
 
         # Min-max normalisation buffers
         if norm_min is not None and norm_max is not None:
@@ -487,6 +490,13 @@ class TrackParameterRegressor(nn.Module):
                     if last_layer.bias is not None:
                         last_layer.bias.zero_()
 
+    def _frontend_eager(self, x: Tensor) -> Tensor:
+        """normalise -> (Fourier) -> input_net; the eager front-end (see forward)."""
+        x = self._normalise(x)
+        if self.fourier_scales:
+            x = fourier_encode(x, self.fourier_scales, self.fourier_base)
+        return self.input_net(x)
+
     def _normalise(self, x: Tensor) -> Tensor:
         """Min-max normalise features to [0, 1]."""
         if not self.use_norm:
@@ -546,14 +556,17 @@ class TrackParameterRegressor(nn.Module):
                 f"pool in ('ssm_cls', 'register_token'); got pool='{self.pool}'."
             )
 
-        # Min-max normalise
-        x = self._normalise(x)
-
-        # Fourier encode: (B, N, D) → (B, N, 2*n_scales*D)
-        x = fourier_encode(x, self.fourier_scales, self.fourier_base)
-
-        # Embed hits: (B, N, fourier_dim) → (B, N, dim)
-        x = self.input_net(x)
+        # Min-max normalise -> Fourier encode (B, N, D) -> (B, N, 2*n_scales*D) -> embed to (B, N, dim).
+        # Opt-in (inference experiments, CLAUDE.md §4.16): TRK_COMPILE_FRONTEND=1 fuses the three
+        # steps with torch.compile (removes the 32 sin/cos kernels + torch.cat); default = eager.
+        if os.environ.get("TRK_COMPILE_FRONTEND", "0") == "1":
+            fe = getattr(self, "_compiled_frontend", None)
+            if fe is None:
+                fe = torch.compile(self._frontend_eager, dynamic=True)
+                self._compiled_frontend = fe
+            x = fe(x)
+        else:
+            x = self._frontend_eager(x)
 
         # Encoder forward pass in reduced precision.  Mamba-2 Triton kernels
         # and flash-attn2 both require bf16/fp16; everything outside this
@@ -600,7 +613,10 @@ class TrackParameterRegressor(nn.Module):
         # (The per-hit sequence output is discarded — only used by the
         # encoder-internal DDP tie that keeps its `gate` / norm params in the
         # autograd graph.)
-        pooled = pooled.to(torch.float32)
+        # Cast to the heads' parameter dtype: fp32 in the default setting (the
+        # encoder may have run under bf16 autocast), float64 under precision
+        # 64-true — a hard-coded float32 here broke the fp64 probe run.
+        pooled = pooled.to(next(self.output_head.parameters()).dtype)
 
         if self.pool == "ssm_state":
             # Split into forward / backward SSM states, project independently.
@@ -804,6 +820,29 @@ class TrackRegressionWrapper(LightningModule):
                 print(f"[fine-tune] Unexpected keys ignored: {unexpected}")
             print(f"[fine-tune] Loaded model weights from {pretrained_ckpt_path}")
 
+    def on_after_batch_transfer(self, batch, dataloader_idx: int):
+        """Match floating-point batch tensors to the model's parameter dtype.
+
+        Under ``trainer.precision: 64-true`` Lightning converts the module to
+        float64 but our collated ``(inputs, targets)`` dicts arrive as float32
+        (the flat loader returns pre-collated tensors), which fails in the first
+        Linear with "mat1 and mat2 must have the same dtype".  A no-op in the
+        default fp32 setting.
+        """
+        model_dtype = self.dtype          # LightningModule dtype, set by the precision plugin
+        if model_dtype == torch.float32:
+            return batch
+
+        def _cast(x):
+            if isinstance(x, dict):
+                return {k: _cast(v) for k, v in x.items()}
+            if isinstance(x, (list, tuple)):
+                return type(x)(_cast(v) for v in x)
+            if isinstance(x, Tensor) and x.is_floating_point():
+                return x.to(model_dtype)
+            return x
+        return _cast(batch)
+
     def setup(self, stage: str) -> None:
         """Log a one-shot summary of architecture/parameter/precision state.
 
@@ -914,28 +953,36 @@ class TrackRegressionWrapper(LightningModule):
         valid_mask: Tensor | None,
         stage: str,
     ) -> None:
-        """Log per-parameter metrics: MAE, precision, and SSM precision on tight DM subset.
+        """Log per-parameter metrics: MAE, precision, and (val/test) the SSM
+        resolution estimators on ALL valid tracks.
 
         Metrics
         -------
         - ``{stage}/{name}/mae``: mean absolute error (all stages)
         - ``{stage}/{name}/precision {unit}``: std of (pred - truth) residuals,
           scaled to physical units (all stages)
-        - ``{stage}/{name}/ssm_precision_dm {unit}``: SSM precision on
-          the double-matched subset — val/test only (needs ACTS DM data).
-        - ``{stage}/{name}/ssm_iqr_dm {unit}``: robust σ estimator
-          ``(Q75 - Q25) / 1.349`` on the double-matched subset — val/test.
-        - ``{stage}/{name}/ssm_rms_dm {unit}``: RMS of the residuals on the
-          double-matched subset — val/test.
+        - ``{stage}/{name}/ssm_precision {unit}``: std of the residuals — val/test
+        - ``{stage}/{name}/ssm_iqr {unit}``: robust σ estimator
+          ``(Q75 - Q25) / 1.349`` — val/test
+        - ``{stage}/{name}/ssm_rms {unit}``: **un-clipped** RMS of the residuals —
+          val/test.  With a few % of catastrophic residuals this sits far above
+          ``ssm_iqr``; that is the tail, not a units problem (see
+          docs/AUDIT_comet_rms_iqr.md).
+        - ``val/{name}/ssm_rms3s {unit}`` and ``val/{name}/ssm_tailfrac``: the
+          iterative-3σ-clipped RMSE (the estimator ``paper_plots`` /
+          ``fast_rms_eval`` report as "RMSE") and the clipped fraction, computed
+          ONCE per validation epoch on the residuals pooled over the whole
+          validation set and all ranks (unbinned) — see
+          :meth:`on_validation_epoch_end`.  Validation only: the clip needs
+          the full residual array and a few host syncs.
 
-        ``_dm`` metrics filter to tracks that are **both** ``valid`` AND
-        ``acts_dm_mask`` (ACTS Kalman Filter purity > 0.75 AND efficiency
-        > 0.75).  The residual is always ``p - t`` against the truth
-        target ``t`` — ACTS reco values are only used as the presence
-        guard.  Any change here must preserve this double-matched filter
-        semantics so that the three DM metrics compare apples to apples.
-
-        ACTS precision is never logged (precomputed / static).
+        History: until 2026-08-25 the three val/test estimators were restricted to
+        the ACTS double-matched subset (``acts_dm_mask``) and carried a ``_dm``
+        suffix.  The user dropped that constraint (the reference is the
+        truth-tracking KF, ~100 % efficient, and the DM cut hid the 4 %
+        mislabelled tracks, CLAUDE.md §0.4); they are now computed on every valid
+        track and ``acts_dm_mask`` is no longer read here.  The residual is always
+        ``p - t`` against the truth target ``t``.
         """
         do_sync = stage != "train"
 
@@ -969,50 +1016,59 @@ class TrackRegressionWrapper(LightningModule):
                     sync_dist=do_sync,
                 )
 
-            # SSM precision on DM subset — val/test only (train has no ACTS data).
-            # See the _log_metrics docstring for the exact DM filter semantics.
-            if stage in ("val", "test"):
-                acts_key = f"acts_reco_{name}"
-                if acts_key in targets and "acts_dm_mask" in targets:
-                    dm_mask = targets["acts_dm_mask"]
-                    if valid_mask is not None:
-                        dm_mask = dm_mask[valid_mask]
+            # SSM resolution estimators on ALL valid tracks — val/test only.
+            if stage in ("val", "test") and residual.numel() > 1:
+                unit, scale = self._PRECISION_UNITS.get(name, ("", 1.0))
+                self.log(f"{stage}/{name}/ssm_precision {unit}", residual.std() * scale, sync_dist=True)
+                quant_levels = torch.tensor([0.25, 0.75], device=residual.device, dtype=residual.dtype)
+                q25, q75 = torch.quantile(residual, quant_levels)
+                self.log(f"{stage}/{name}/ssm_iqr {unit}", (q75 - q25) / 1.349 * scale, sync_dist=True)
+                self.log(f"{stage}/{name}/ssm_rms {unit}", torch.sqrt((residual ** 2).mean()) * scale, sync_dist=True)
+                # Keep the residuals for the unbinned iterative-3σ RMSE at epoch end.
+                if stage == "val":
+                    self._val_residuals.setdefault(name, []).append(residual.detach().float().cpu())
 
-                    if dm_mask.any():
-                        p_dm = p[dm_mask]
-                        t_dm = t[dm_mask]
-                        ssm_residual_dm = p_dm - t_dm
-                        if name == "phi":
-                            ssm_residual_dm = torch.where(ssm_residual_dm > math.pi, ssm_residual_dm - 2.0 * math.pi, ssm_residual_dm)
-                            ssm_residual_dm = torch.where(ssm_residual_dm < -math.pi, ssm_residual_dm + 2.0 * math.pi, ssm_residual_dm)
-                        if ssm_residual_dm.numel() > 1:
-                            unit, scale = self._PRECISION_UNITS.get(name, ("", 1.0))
-                            # σ — standard deviation (shared DM mask construction)
-                            self.log(
-                                f"{stage}/{name}/ssm_precision_dm {unit}",
-                                ssm_residual_dm.std() * scale,
-                                sync_dist=True,
-                            )
-                            # IQR/1.349 — robust σ estimator (tail-robust)
-                            quant_levels = torch.tensor(
-                                [0.25, 0.75],
-                                device=ssm_residual_dm.device,
-                                dtype=ssm_residual_dm.dtype,
-                            )
-                            q25, q75 = torch.quantile(ssm_residual_dm, quant_levels)
-                            self.log(
-                                f"{stage}/{name}/ssm_iqr_dm {unit}",
-                                (q75 - q25) / 1.349 * scale,
-                                sync_dist=True,
-                            )
-                            # RMS — captures outlier contribution (tail-sensitive)
-                            rms = torch.sqrt((ssm_residual_dm ** 2).mean())
-                            self.log(
-                                f"{stage}/{name}/ssm_rms_dm {unit}",
-                                rms * scale,
-                                sync_dist=True,
-                            )
+    # -- unbinned iterative-3σ RMSE over the whole validation set ------------
 
+    def on_validation_epoch_start(self) -> None:
+        self._val_residuals: dict[str, list[Tensor]] = {}
+
+    def on_validation_epoch_end(self) -> None:
+        """Pool the validation residuals over all batches and ranks and log the
+        iterative-3σ-clipped RMSE per parameter (``eval_utils.iterative_rms_convergence``,
+        the same routine the offline reports use) plus the clipped fraction.
+
+        The pooled (unbinned) clip is what ``fast_rms_eval`` / ``paper_plots``
+        report as "RMSE", so these curves are directly comparable to the offline
+        tables.  Runs once per validation epoch; the residual arrays are a few
+        hundred MB at most (5 M tracks x 5 parameters, float32).
+        """
+        from track_regression.eval_utils import iterative_rms_convergence
+
+        buf = getattr(self, "_val_residuals", None) or {}
+        names = list(self.model.loss_module.parameter_order)
+        local = {n: (torch.cat(buf[n]).numpy() if buf.get(n) else None) for n in names}
+        if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+            gathered: list = [None] * dist.get_world_size()
+            dist.all_gather_object(gathered, local)
+            pooled = {n: [g[n] for g in gathered if g and g.get(n) is not None] for n in names}
+            local = {n: (np.concatenate(v) if v else None) for n, v in pooled.items()}
+        self._val_residuals = {}
+        summary = []
+        for n in names:
+            r = local.get(n)
+            if r is None or len(r) < 2:
+                continue
+            unit, scale = self._PRECISION_UNITS.get(n, ("", 1.0))
+            cut = iterative_rms_convergence(r)
+            rms3s = float(cut["rms"]) * scale
+            tail = 1.0 - float(cut["n_kept"]) / len(r)
+            self.log(f"val/{n}/ssm_rms3s {unit}", rms3s, rank_zero_only=True, sync_dist=False)
+            self.log(f"val/{n}/ssm_tailfrac", tail, rank_zero_only=True, sync_dist=False)
+            summary.append(f"{n} {rms3s:.4g} {unit.strip('[]')} (clipped {100 * tail:.2f} %)")
+        if summary and self.trainer is not None and self.trainer.is_global_zero:
+            n_tot = len(next(v for v in local.values() if v is not None))
+            print(f"[val epoch {self.current_epoch}] iter-3σ RMSE on {n_tot:,} tracks: " + " | ".join(summary), flush=True)
 
     # -- train / val / test ------------------------------------------------
 
@@ -1217,12 +1273,14 @@ class TrackRegressionWrapper(LightningModule):
                 decay_pct = float(self.lrs_config.get("decay_pct", 0.15))
                 warmup_steps = int(warmup_pct * total_steps)
                 decay_start = int((1.0 - decay_pct) * total_steps)
-                if not (0 < warmup_steps < decay_start < total_steps):
+                # decay_pct == 0 is allowed: warm-up + constant plateau, no cooldown
+                # (stage 1 of a two-stage large-batch -> small-batch run).
+                if not (0 < warmup_steps < decay_start <= total_steps):
                     raise ValueError(
                         "Invalid WSD schedule: "
                         f"warmup_steps={warmup_steps}, decay_start={decay_start}, "
                         f"total_steps={total_steps} — require "
-                        "0 < warmup_steps < decay_start < total_steps"
+                        "0 < warmup_steps < decay_start <= total_steps"
                     )
 
                 if len(opt.param_groups) == 1:
@@ -1247,16 +1305,21 @@ class TrackRegressionWrapper(LightningModule):
                     factor=1.0,
                     total_iters=decay_start - warmup_steps,
                 )
-                cosine_sch = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    opt,
-                    T_max=total_steps - decay_start,
-                    eta_min=float(self.lrs_config["end"]),
-                )
-                sch = torch.optim.lr_scheduler.SequentialLR(
-                    opt,
-                    schedulers=[warmup_sch, hold_sch, cosine_sch],
-                    milestones=[warmup_steps, decay_start],
-                )
+                if decay_start >= total_steps:          # no cooldown phase
+                    sch = torch.optim.lr_scheduler.SequentialLR(
+                        opt, schedulers=[warmup_sch, hold_sch], milestones=[warmup_steps],
+                    )
+                else:
+                    cosine_sch = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        opt,
+                        T_max=total_steps - decay_start,
+                        eta_min=float(self.lrs_config["end"]),
+                    )
+                    sch = torch.optim.lr_scheduler.SequentialLR(
+                        opt,
+                        schedulers=[warmup_sch, hold_sch, cosine_sch],
+                        milestones=[warmup_steps, decay_start],
+                    )
             else:
                 sch = torch.optim.lr_scheduler.OneCycleLR(
                     opt,

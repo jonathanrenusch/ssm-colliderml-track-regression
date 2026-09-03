@@ -1,0 +1,75 @@
+# =============================================================================
+# Trial B — FULL-GPU BATCH, same recipe as A otherwise.  4 L / dim 128 /
+# d_state 64, Lion + OneCycle, batch 36 000 (40 000 peaked at 90.6 GB of the H100's 95.8 GB in the
+# dry run; 36 000 leaves ~8 GB margin), 20 epochs = 106 k steps (17.6x fewer
+# than A at the same data budget).
+# Machine: THIS machine (sess3), GPU 0.   Question: does the small-batch
+# constraint survive on the new data?  Compare per-pT-bin iter-3σ RMSE to A at
+# equal epochs (scripts/04_eval_ckpt_iclr.sh -> rms_by_pt.txt).
+# Cost: measured 1.1 steps/s at 40 k -> ~75 min/epoch -> ~25 h for 20 epochs.
+# =============================================================================
+trainer:
+  devices: [0]             # single GPU; index on the machine named in the header
+  max_epochs: 20
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW1-B-4L-ds64-lion-cosine-bs36k
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: Lion
+  lrs_config:                 # legacy recipe with sqrt(40000/2048) = 4.4x LR scaling
+    initial: 4.4e-05
+    max: 2.2e-04
+    end: 4.4e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+  model:
+    init_args:
+      # 4-layer narrow network of the legacy scaling study (dim 128, heads [128]),
+      # d_state raised 16 -> 64: +17 % inference time, +100 k params, free in training.
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 4
+          dim: 128
+          d_state: 64
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile,     weight: 0.1, norm_min: -7.1,   norm_max: 7.1,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile,     weight: 1.0, norm_min: -270.0, norm_max: 270.0, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: circular,     weight: 0.1, beta: 0.01}
+            theta: {type: quantile_eta, weight: 1.0, norm_min: -3.0,   norm_max: 3.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile,     weight: 1.0, norm_min: -1.0,   norm_max: 1.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1 / §0.4)
+  batch_size: 36000        # 40 000 peaked at 90.6 of 95.8 GB in the 2026-08-25 dry run (~2.2 MiB/track + 3 GB); 36 000 leaves margin
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  load_acts: true
+  max_val_tracks: 1000000       # fixed 1 M-track val subset, spread over all 5 parts (per-epoch metrics)

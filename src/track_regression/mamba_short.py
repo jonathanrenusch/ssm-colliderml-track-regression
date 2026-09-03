@@ -40,6 +40,7 @@ re-expression.  Parity-critical facts mirrored here:
 
 from __future__ import annotations
 
+import os
 import math
 
 import torch
@@ -512,6 +513,35 @@ def fused_bidi_scan_packed(
 
     rows = x_norm[0] if x_norm.dim() == 3 else x_norm  # (T_aug, D)
     T = rows.shape[0]
+
+    if os.environ.get("TRK_SSD_MERGED_BIDI", "0") == "1":
+        # Opt-in "v6m": ONE fused in-projection GEMM + ONE scan launch for both
+        # directions (grid axis 2 = direction, runtime reversal, stacked
+        # weights) — see ops.ssd_short_triton._ssd_short_fwd_kernel2pm.
+        from track_regression.ops.ssd_short_triton import ssd_short_fwd_packed_merged
+
+        if getattr(layer, "_merged_dev", None) != rows.device:
+            with torch.no_grad():
+                cshape = fm.conv1d.weight.shape[0]
+                layer._merged_in_w = torch.cat(
+                    [fm.in_proj.weight, bm.in_proj.weight], 0).contiguous()
+                layer._merged_convw = torch.stack(
+                    [fm.conv1d.weight.reshape(cshape, -1),
+                     bm.conv1d.weight.reshape(cshape, -1)]).contiguous()
+                layer._merged_convb = torch.stack([fm.conv1d.bias, bm.conv1d.bias]).contiguous()
+                layer._merged_dtb = torch.stack([fm.dt_bias, bm.dt_bias]).contiguous()
+                layer._merged_alog = torch.stack([fm.A_log, bm.A_log]).contiguous()
+                layer._merged_d = torch.stack([fm.D, bm.D]).contiguous()
+                layer._merged_dev = rows.device
+        zx_fb = torch.nn.functional.linear(rows, layer._merged_in_w)  # (T, 2*dproj)
+        y2 = ssd_short_fwd_packed_merged(
+            zx_fb, layer._merged_convw, layer._merged_convb, layer._merged_dtb,
+            layer._merged_alog, layer._merged_d, cu_seqlens_aug, H, P, N,
+        )
+        yn_f = gated_rmsnorm(y2[0], zx_fb[:, :dproj], fm.norm.weight, fm.norm.eps)
+        yn_b = gated_rmsnorm(y2[1], zx_fb[:, dproj:], bm.norm.weight, bm.norm.eps)
+        return fm.out_proj(yn_f).unsqueeze(0), bm.out_proj(yn_b).unsqueeze(0)
+
     zx_f = fm.in_proj(rows).contiguous()
     zx_b = bm.in_proj(rows).contiguous()
     y_f = ssd_short_fwd_packed(

@@ -284,6 +284,11 @@ class KernelSwapCallback(Callback):
         from track_regression.mamba_short import apply_variant
 
         apply_variant(pl_module.model, self.variant)
+        # apply_variant builds fresh Mamba2Short modules under the default dtype
+        # (float32).  Under trainer.precision 64-true Lightning has already
+        # converted the module to float64, so re-align the swapped layers with
+        # the LightningModule's dtype (no-op for the default fp32 setting).
+        pl_module.model.to(dtype=pl_module.dtype)
         rank_zero_info(
             f"[KernelSwapCallback] applied variant {self.variant!r} to "
             f"{type(pl_module.model.encoder).__name__}"

@@ -129,12 +129,14 @@ def build_residuals(h5_path: Path, store_dir: Path) -> dict:
             tkf = tkf[:n]
 
     # Reference: the truth-tracking KF when the dataset has it, else the CKF.
-    # Both are kept when both exist so nothing is hidden.
+    # The CKF is no longer drawn as an extra series when the truth-KF exists
+    # (user decision 2026-09-01: every test set now carries the truth-KF); the
+    # DM subset definition is unchanged so numbers stay comparable.
     has_ckf = np.asarray(dm_mask, bool) & np.isfinite(acts[:, 0])
     if tkf is not None:
         tkf = np.asarray(tkf)[:n]
         dm = has_ckf & np.isfinite(tkf[:, 0])
-        ref, ref_name, second, second_name = tkf, "truth-KF", acts, "CKF"
+        ref, ref_name, second, second_name = tkf, "truth-KF", None, None
     else:
         dm = has_ckf
         ref, ref_name, second, second_name = acts, "CKF", None, None
@@ -152,6 +154,7 @@ def build_residuals(h5_path: Path, store_dir: Path) -> dict:
             out[f"second_{p}"] = (_wrap(o) if p == "phi" else o)[dm]
     th = targets["theta"][dm]
     out["eta"] = -np.log(np.tan(np.clip(th, 1e-8, np.pi - 1e-8) / 2.0))
+    out["pt"] = np.sin(th) / np.maximum(np.abs(targets["qop"][dm]), 1e-12)
     return out
 
 
@@ -298,6 +301,34 @@ def make_plots(res: dict, out_dir: Path, dataset: str, subtitle: str) -> None:
         _save_pdf(fig, out_dir, f"{dataset}__{stem}")
 
 
+PT_EDGES = np.array([0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 110.0, np.inf])
+
+
+def pt_bin_table(res: dict, ds: str) -> list[str]:
+    """iter-3sigma RMSE per pT bin, SSM vs reference, all five parameters.
+
+    The readout for data-sufficiency / low-pT runs: compare two models bin by bin
+    (the uniform muon set has ~1.76 M training tracks per GeV, nothing below 1 GeV).
+    """
+    pt = res["pt"]
+    idx = np.clip(np.digitize(pt, PT_EDGES) - 1, 0, len(PT_EDGES) - 2)
+    lines = [f"{ds} — iter-3sigma RMSE per pT bin, SSM / {res.get('ref_name', 'CKF')}",
+             f"{'pT [GeV]':>12s} {'N':>9s} " + " ".join(f"{p + ' ' + DISPLAY_UNIT[p]:>22s}" for p in PARAMS)]
+    for b in range(len(PT_EDGES) - 1):
+        m = idx == b
+        n = int(m.sum())
+        if n < 100:
+            continue
+        cells = []
+        for p in PARAMS:
+            s_ = _iter_rms(res[f"ssm_{p}"][m]) * DISPLAY_SCALE[p]
+            r_ = _iter_rms(res[f"ckf_{p}"][m]) * DISPLAY_SCALE[p]
+            cells.append(f"{_fmt(s_) + '/' + _fmt(r_):>22s}")
+        lo, hi = PT_EDGES[b], PT_EDGES[b + 1]
+        lines.append(f"{f'{lo:g}-{hi:g}':>12s} {n:>9,d} " + " ".join(cells))
+    return lines
+
+
 def summary_row(res: dict) -> dict:
     row = {"n_dm": res["count"], "n_total": res["n_total"]}
     for p in PARAMS:
@@ -337,6 +368,7 @@ def main():
         return root / ds / "test"
 
     table = {}
+    pt_lines: list[str] = []
     for ds in names:
         h5 = pred_dir / f"{ds}.h5"
         if not h5.exists():
@@ -346,6 +378,7 @@ def main():
         res = build_residuals(h5, store_of(ds))
         make_plots(res, out, ds, a.subtitle)
         table[ds] = summary_row(res)
+        pt_lines += pt_bin_table(res, ds) + [""]
         print(f"  {ds:22s} N_dm={res['count']:>10,d} / {res['n_total']:>10,d}"
               f"   ({time.time() - t0:.1f}s)", flush=True)
 
@@ -364,7 +397,9 @@ def main():
             for p in PARAMS))
     txt = "iter-3sigma RMSE, SSM/CKF\n" + "\n".join(lines) + "\n"
     (out / "rms_summary.txt").write_text(txt)
+    (out / "rms_by_pt.txt").write_text("\n".join(pt_lines))
     print("\n" + txt)
+    print("\n".join(pt_lines))
     print(f"figures + summary -> {out}")
 
 

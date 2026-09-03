@@ -1,0 +1,74 @@
+# =============================================================================
+# Trial C — LEGACY HEADLINE NETWORK, vanilla pretraining.  10 L / dim 192 /
+# d_state 128 (was 32), Lion + OneCycle, batch 2048, 20 epochs = 1.87 M steps.
+# Machine: OTHER machine, GPU 1.   Question: how much does the 5x larger
+# network buy over A on the new data (same recipe, same batch)?
+# Cost: ~3 h/epoch on an H100 (6.2 h on an L40S) -> 2.5 days.
+# NOTE: the still-running baeedc59 (10 L / d_state 32, time-scrambled store) on
+# sess12 must be stopped first — this replaces it.
+# =============================================================================
+trainer:
+  devices: [1]             # single GPU; index on the machine named in the header
+  max_epochs: 20
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW1-C-10L-ds128-lion-cosine-bs2048
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: Lion
+  lrs_config:                 # legacy pretrain recipe, verbatim (OneCycle = warm-up + cosine)
+    initial: 1.0e-05
+    max: 5.0e-05
+    end: 1.0e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+  model:
+    init_args:
+      # Legacy headline shape (10 L / dim 192, unbottlenecked pool head 384) with
+      # d_state raised 32 -> 128.
+      dim: 192
+      output_head_hidden_layers: [256]
+      input_net_hidden_layers: [192]
+      state_head_output_dim: 384
+      state_head_hidden_layers: 0
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 10
+          dim: 192
+          d_state: 128
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile,     weight: 0.1, norm_min: -7.1,   norm_max: 7.1,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile,     weight: 1.0, norm_min: -270.0, norm_max: 270.0, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: circular,     weight: 0.1, beta: 0.01}
+            theta: {type: quantile_eta, weight: 1.0, norm_min: -3.0,   norm_max: 3.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile,     weight: 1.0, norm_min: -1.0,   norm_max: 1.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1 / §0.4)
+  batch_size: 2048
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  load_acts: true
+  max_val_tracks: 1000000       # fixed 1 M-track val subset, spread over all 5 parts (per-epoch metrics)

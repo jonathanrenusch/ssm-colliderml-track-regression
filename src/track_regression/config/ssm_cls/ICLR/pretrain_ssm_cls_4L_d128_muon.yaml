@@ -230,7 +230,7 @@ model:
 
 data:
   # Copy /eos -> /scratch first: scripts/copy_dataset.sh <eos_path> <this_path>
-  preprocessed_dir: /scratch/colliderml/ICLR_retraining/single_muon_uniform
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1/§0.4); ICLR_retraining is deprecated
   load_acts: true          # val/test only; the train store never loads it
   batch_size: 32000        # PER DEVICE — global batch is 32000 x n_gpu
   num_workers: 8

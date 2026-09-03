@@ -1,0 +1,80 @@
+# =============================================================================
+# Trial E — LOW-pT DATA SUFFICIENCY.  Identical to B (4 L / dim 128 / d_state
+# 64, Lion + OneCycle, batch 36 000) but trained on 25 % of the training
+# tracks — max_train_tracks 47,883,188 spread over all 192 parts — for 80
+# epochs, i.e. the SAME 95.8 k optimizer steps and the same 3.83 B track
+# presentations as B.  Only the number of DISTINCT tracks differs (4x fewer:
+# ~0.44 M instead of 1.76 M per GeV in the 1-3 GeV bins).
+# Machine: THIS machine (sess3), GPU 2.
+# Read-out: rms_by_pt.txt of E vs B.  If the 1-3 GeV bins are worse in E while
+# the > 10 GeV bins are equal, the low-pT regime is data-limited and more
+# low-pT data would help; if all bins are equal, more of the SAME data would
+# not, and only the low-pT gun production can move that regime.
+# Cost: ~75 min/epoch -> ~25 h.
+# =============================================================================
+trainer:
+  devices: [2]             # single GPU; index on the machine named in the header
+  max_epochs: 80
+  use_distributed_sampler: false
+  precision: 32-true
+  gradient_clip_val: 1.0
+  benchmark: true
+  logger:
+    init_args:
+      name: SW1-E-4L-ds64-lion-cosine-bs36k-data25pct
+      project_name: ssm-track-regression-iclr
+
+model:
+  optimizer: Lion
+  lrs_config:                 # legacy recipe with sqrt(40000/2048) = 4.4x LR scaling
+    initial: 4.4e-05
+    max: 2.2e-04
+    end: 4.4e-06
+    pct_start: 0.10
+    weight_decay: 1.0e-03
+    skip_scheduler: false
+  model:
+    init_args:
+      # 4-layer narrow network of the legacy scaling study (dim 128, heads [128]),
+      # d_state raised 16 -> 64: +17 % inference time, +100 k params, free in training.
+      dim: 128
+      output_head_hidden_layers: [128]
+      input_net_hidden_layers: [128]
+      state_head_output_dim: 128
+      state_head_hidden_layers: [128]
+      state_head_dropout: 0.0
+      encoder:
+        class_path: track_regression.mamba_cls.BidirectionalMambaCLSEncoder
+        init_args:
+          num_layers: 4
+          dim: 128
+          d_state: 64
+          d_conv: 4
+          expand: 2
+          headdim: 32
+          ngroups: 1
+          norm: RMSNorm
+          dropout: 0.0
+          cls_init_scale: 0.02
+          residual_depth_init: true
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          parameter_order: [d0, z0, phi, theta, qop]
+          config:
+            d0:    {type: quantile,     weight: 0.1, norm_min: -7.1,   norm_max: 7.1,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {type: quantile,     weight: 1.0, norm_min: -270.0, norm_max: 270.0, quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            phi:   {type: circular,     weight: 0.1, beta: 0.01}
+            theta: {type: quantile_eta, weight: 1.0, norm_min: -3.0,   norm_max: 3.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            qop:   {type: quantile,     weight: 1.0, norm_min: -1.0,   norm_max: 1.0,   quantiles: [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+
+data:
+  preprocessed_dir: /scratch/colliderml/ICLR_retraining_geom/single_muon_uniform   # geometry-ordered, event_id-joined store (CLAUDE.md §0.1 / §0.4)
+  batch_size: 36000        # 40 000 peaked at 90.6 of 95.8 GB in the 2026-08-25 dry run (~2.2 MiB/track + 3 GB); 36 000 leaves margin
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  packed_batches: true
+  load_acts: true
+  max_val_tracks: 1000000       # fixed 1 M-track val subset, spread over all 5 parts (per-epoch metrics)
+  max_train_tracks: 47883188     # 25 % of 191,532,752, spread over all parts
