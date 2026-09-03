@@ -87,3 +87,21 @@ loophole, `--hit-bounds-tolerance 25` (vs the original 5), is a measured no-op o
 question: 0 of 3,150,281 uniform-muon hits project outside sensor bounds even at 5 mm. The
 defect is in the original configuration: the converter's default measurement covariances plus
 the in-script truth-estimated seeding / bare KF setup.
+
+## Addendum 2 (2026-09-03 evening): hit-ordering A/B — efficiency was ordering; σ is covariances
+
+The shim originally passed the v2 DIGITISED hit time as the Release-1 `time` column; ACTS's
+`TruthTrackFinder` sorts prototracks by `SimHit::time()`, so all KF prototracks were scrambled
+(strips = time 0 first). A/B rerun of the identical uniform 200 k pipeline with `time :=
+tracker_simhits.true_time` (now the shim default; `DIGI_TIME=1` restores the old behaviour):
+
+- **KF match rate 76.0 % → 99.3 %** — the fit losses were entirely the scrambled ordering
+  (seeding/fit failures), i.e. an artifact of the v2 schema change, now fixed in the shim.
+- **The σ miscalibration persists** (iterative estimator, vs production truth-KF):
+  d0 1.35×, z0 2.00×, φ 1.52×, θ 3.18×, q/p 1.43×. (Ratios are not directly comparable to
+  Addendum-1's 76 %-survivor sample: the fixed run now includes the recovered ~23 % hardest
+  tracks.) Conclusion unchanged: the resolution excess is the converter's default measurement
+  covariances — paper references stay on the production `truth_tracks`.
+- The 100 %-vs-74.6 % efficiency contrast in older text should be restated as
+  100 % vs 99.3 % (with the time fix) — the SSM efficiency point survives only as
+  "fits every prototrack including the 0.7 % the refit still loses".

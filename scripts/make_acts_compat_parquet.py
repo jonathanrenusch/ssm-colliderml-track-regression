@@ -90,14 +90,24 @@ def shim_run(src: Path, out: Path, max_events: int | None = None) -> None:
         tx = np.asarray(sims["true_x"][j].values, dtype=np.float32)[first_sim]
         ty = np.asarray(sims["true_y"][j].values, dtype=np.float32)[first_sim]
         tz = np.asarray(sims["true_z"][j].values, dtype=np.float32)[first_sim]
+        # Release-1's hit `time` was the TRUTH time; v2's digitised time is 0 for
+        # all strips, which scrambles TruthTrackFinder's per-track hit ordering
+        # (it sorts by SimHit::time) and degrades the in-pipeline KF seeding/fit.
+        # Default: substitute the sim true_time.  DIGI_TIME=1 keeps the raw column.
+        t_time = np.asarray(sims["true_time"][j].values, dtype=np.float32)[first_sim]
 
         out_cols["event_id"].append(ev)
         for name, dtype in (("x", np.float32), ("y", np.float32), ("z", np.float32),
-                            ("time", np.float32), ("detector", np.uint8),
+                            ("detector", np.uint8),
                             ("volume_id", np.uint8), ("layer_id", np.uint16),
                             ("surface_id", np.uint32)):
             out_cols[name].append(np.asarray(hits[name][i].values, dtype=dtype))
         out_cols["true_x"].append(tx); out_cols["true_y"].append(ty); out_cols["true_z"].append(tz)
+        import os as _os
+        if _os.environ.get("DIGI_TIME") == "1":
+            out_cols["time"].append(np.asarray(hits["time"][i].values, dtype=np.float32))
+        else:
+            out_cols["time"].append(t_time)
         out_cols["particle_id"].append(first_p)
 
     schema = pa.schema([
