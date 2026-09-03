@@ -527,6 +527,21 @@ class TrackParameterRegressor(nn.Module):
             ``"hidden_state"`` — pooled per-track summary ``(B, pool_dim)``
         """
         x = inputs["hit_features"]
+        # Deployment auto-seed (inference only): when the batch carries the 12
+        # RAW hit features but the model was trained with the 3 seed-residual
+        # features (input_dim = 15), compute the ACTS three-point seed and the
+        # residual features ON THE GPU inside the forward -- the seed is part of
+        # the model, not of the data pipeline.  The seed parameters are exposed
+        # as ``out["seed"]`` so callers can anchor ``predict_physical`` with
+        # them.  Training batches always arrive with the full feature set from
+        # the collate, so this path never triggers there.
+        _auto_seed = None
+        if (not self.training and inputs.get("cu_seqlens") is not None
+                and x.shape[-1] == self.input_dim - 3):
+            from track_regression.seed_torch import gpu_seed_features
+
+            _auto_seed, _res = gpu_seed_features(x[0], inputs["cu_seqlens"], max_len=20)
+            x = torch.cat([x[0], _res], dim=1).unsqueeze(0)
         # Truth time is the encoder sort key (replaces s = sqrt(x²+y²+z²),
         # which underestimates on-helix arc length for forward tracks).
         # ``hit_s`` is still produced by the dataloader as input feature
@@ -645,7 +660,10 @@ class TrackParameterRegressor(nn.Module):
         else:
             pred = pred_reg
 
-        return {"pred": pred, "hidden_state": pooled}
+        out = {"pred": pred, "hidden_state": pooled}
+        if _auto_seed is not None:
+            out["seed"] = _auto_seed
+        return out
 
     def predict(self, outputs: dict[str, Tensor]) -> dict[str, Tensor]:
         """Convert raw outputs to physical predictions."""
