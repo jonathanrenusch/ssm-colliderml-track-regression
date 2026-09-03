@@ -75,14 +75,14 @@ def residual_hist_pages(res: dict, out_dir: Path, dataset: str, subtitle: str, k
                 ax.hist(np.clip(arr, lo, hi) * scale, bins=120,
                         range=(lo * scale, hi * scale), histtype="step",
                         color=colour, lw=1.6, density=True,
-                        label=f"{tag}  iter-3σ = {rms3 * scale:.3g} {unit} "
+                        label=f"{tag}  iter-3σ = {rms3 * scale:.3g} {unit}\n"
                               f"({clip_pct:.1f} % clipped)")
             ax.set_xlabel(f"residual({p}) [{unit}]")
             ax.set_ylabel("density")
             ax.set_title(p)
             if logy:
                 ax.set_yscale("log")
-            ax.legend(loc="upper left", fontsize=6.4, framealpha=0.85,
+            ax.legend(loc="best", fontsize=6.4, framealpha=0.9,
                       handlelength=1.2, borderpad=0.25, labelspacing=0.2)
         fill_eta_stephist(axes[5], res["eta"])
         fig.suptitle(f"{dataset} — residuals (iterative-3σ clip in the legends) — "

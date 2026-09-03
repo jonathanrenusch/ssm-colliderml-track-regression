@@ -116,12 +116,12 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                 urms, uk, un = _clip_rms(resid)
                 clipped = un - uk
                 ax.plot(c, v * sc, "-", color=COL[lab], lw=1.8,
-                        label=f"{lab}: {urms*sc:.3g} {UNIT[p]} "
+                        label=f"{lab}: {urms*sc:.3g} {UNIT[p]}\n"
                               f"({100*clipped/max(un,1):.1f}% clipped)")
                 ax.fill_between(c, (v - e) * sc, (v + e) * sc, color=COL[lab], alpha=ALPHA, lw=0)
             ax.set_ylabel(f"iter-3$\\sigma$ RMS({MATH[p]}) [{UNIT[p]}]", fontsize=9)
             ax.set_title(MATH[p]); ax.set_ylim(bottom=0)
-            ax.legend(loc="upper center", fontsize=6.6, framealpha=0.85,
+            ax.legend(loc="best", fontsize=6.6, framealpha=0.9,
                       handlelength=1.2, borderpad=0.25, labelspacing=0.2)
             cs, vs, es = curves["SSM"]; ck, vk, ek = curves["KF"]
             common, a, bxi = np.intersect1d(cs, ck, return_indices=True)
@@ -143,7 +143,7 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
             ax6.set_xlim(-3, 3)
         fig.suptitle(f"{ds} --- iterative-3$\\sigma$-clipped RMS vs {xlabel}; "
                      f"total $N={N:,}$ tracks (fitted by both); "
-                     f"bands = analytic RMS error (no bootstrap)", y=0.995, fontsize=11)
+                     f"bands = analytic RMS error", y=0.995, fontsize=11)
         fig.savefig(out_dir / f"{ds}_acts__{stem}.pdf", bbox_inches="tight")
         plt.close(fig)
         print(f"[rmscurve] {out_dir / f'{ds}_acts__{stem}.pdf'}", flush=True)
