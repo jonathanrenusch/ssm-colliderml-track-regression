@@ -77,3 +77,13 @@ estimator — is:
    (nested `particle_ids`, truth moved to `tracker_simhits` — shimmed by
    `scripts/make_acts_compat_parquet.py`) and 4 wrong-surface hits in 45 M ttbar hits
    (`scripts/filter_acts_hits.py`).
+
+## Addendum (2026-09-03): the miscalibration is NOT caused by our v2 adaptations
+
+Checked explicitly: (a) the SSM consumes the identical shim+converter hit positions and
+reproduces its flat-store numbers to ~1 % (d0 14.0 vs 13.9 µm) — the measurements reaching both
+fitters are fine; (b) all our script changes are SSM-only or system-symmetric; (c) the one real
+loophole, `--hit-bounds-tolerance 25` (vs the original 5), is a measured no-op on the dataset in
+question: 0 of 3,150,281 uniform-muon hits project outside sensor bounds even at 5 mm. The
+defect is in the original configuration: the converter's default measurement covariances plus
+the in-script truth-estimated seeding / bare KF setup.
