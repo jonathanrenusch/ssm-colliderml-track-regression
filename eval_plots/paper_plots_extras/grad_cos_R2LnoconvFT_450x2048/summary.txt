@@ -1,0 +1,68 @@
+Config: eval_plots/sweep7/R2LnoconvFT/config.yaml
+Checkpoint: eval_plots/sweep7/R2LnoconvFT/ckpts/model.ckpt
+Data: /scratch/colliderml/ICLR_eval_v2/ttbar_new_pt1
+N batches: 450  BS=2048  (921,600 tracks)
+Trunk params: 628,320
+
+Mean cosine matrix:
+               d0       z0      phi    theta      qop
+     d0   +1.000  +0.205  +0.807  +0.253  +0.030
+     z0   +0.205  +1.000  +0.208  +0.315  +0.002
+    phi   +0.807  +0.208  +1.000  +0.240  +0.048
+  theta   +0.253  +0.315  +0.240  +1.000  +0.003
+    qop   +0.030  +0.002  +0.048  +0.003  +1.000
+
+Std across batches (per-batch noise floor; independent of N):
+               d0       z0      phi    theta      qop
+     d0   0.000  0.252  0.163  0.274  0.124
+     z0   0.252  0.000  0.253  0.235  0.072
+    phi   0.163  0.253  0.000  0.283  0.139
+  theta   0.274  0.235  0.283  0.000  0.092
+    qop   0.124  0.072  0.139  0.092  0.000
+
+Standard error on the mean (std/sqrt(450)):
+               d0       z0      phi    theta      qop
+     d0   0.0000  0.0119  0.0077  0.0129  0.0059
+     z0   0.0119  0.0000  0.0119  0.0111  0.0034
+    phi   0.0077  0.0119  0.0000  0.0133  0.0065
+  theta   0.0129  0.0111  0.0133  0.0000  0.0044
+    qop   0.0059  0.0034  0.0065  0.0044  0.0000
+
+Mean / sem (significance of each entry):
+               d0       z0      phi    theta      qop
+     d0   +11876100.0  +17.3  +105.3  +19.6  +5.2
+     z0   +17.3  +11375170.0  +17.5  +28.4  +0.6
+    phi   +105.3  +17.5  +12125065.0  +18.0  +7.3
+  theta   +19.6  +28.4  +18.0  +10862824.0  +0.7
+    qop   +5.2  +0.6  +7.3  +0.7  +13567620.0
+
+POOLED cosine -- gradients accumulated over all 921,600 tracks
+(no minibatch-noise attenuation; this is the alignment of the true gradients):
+               d0       z0      phi    theta      qop
+     d0   +1.000  +0.754  +0.964  +0.769  +0.122
+     z0   +0.754  +1.000  +0.753  +0.635  +0.083
+    phi   +0.964  +0.753  +1.000  +0.736  +0.142
+  theta   +0.769  +0.635  +0.736  +1.000  -0.009
+    qop   +0.122  +0.083  +0.142  -0.009  +1.000
+
+Pooled jackknife error (10 blocks):
+               d0       z0      phi    theta      qop
+     d0   0.0000  0.0270  0.0072  0.0323  0.0769
+     z0   0.0270  0.0000  0.0199  0.0435  0.0344
+    phi   0.0072  0.0199  0.0000  0.0321  0.0712
+  theta   0.0323  0.0435  0.0321  0.0000  0.0631
+    qop   0.0769  0.0344  0.0712  0.0631  0.0000
+
+Pooled cosine with the direction common to all five tasks projected out
+(guards against a shared domain-shift offset inflating every entry):
+               d0       z0      phi    theta      qop
+     d0   +1.000  -0.139  +0.718  +0.053  -0.608
+     z0   -0.139  +1.000  -0.125  -0.135  -0.400
+    phi   +0.718  -0.125  +1.000  -0.092  -0.530
+  theta   +0.053  -0.135  -0.092  +1.000  -0.529
+    qop   -0.608  -0.400  -0.530  -0.529  +1.000
+
+Gradient character per parameter (1.0 = one fixed direction every batch,
+0.047 = pure noise about zero at N=450):
+               d0       z0      phi    theta      qop
+  syst.   +0.251  +0.215  +0.232  +0.226  +0.127

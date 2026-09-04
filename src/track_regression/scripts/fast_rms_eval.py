@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -40,7 +41,11 @@ from track_regression.paper_plots import apply_paper_style, save_fig  # noqa: E4
 from track_regression.paper_plots.plots._panels import fill_eta_stephist, make_grid  # noqa: E402
 from track_regression.paper_plots.stats import DISPLAY_SCALE, DISPLAY_UNIT  # noqa: E402
 
-ETA_EDGES = np.linspace(-3.0, 3.0, 31)
+# TRK_ABS_ETA_MAX: fiducial |eta| cut on tracks AND the eta axis (paper default
+# 2.0 since 2026-09-04: the shipped truth-KF reference is miscalibrated above
+# ~80 GeV outside |eta| < 2).  Bin width stays 0.2.
+ABS_ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
+ETA_EDGES = np.linspace(-ABS_ETA_MAX, ABS_ETA_MAX, int(round(10 * ABS_ETA_MAX)) + 1)
 
 
 def _save_pdf(fig, out_dir: Path, stem: str) -> None:
@@ -155,6 +160,12 @@ def build_residuals(h5_path: Path, store_dir: Path) -> dict:
     th = targets["theta"][dm]
     out["eta"] = -np.log(np.tan(np.clip(th, 1e-8, np.pi - 1e-8) / 2.0))
     out["pt"] = np.sin(th) / np.maximum(np.abs(targets["qop"][dm]), 1e-12)
+    if ABS_ETA_MAX < 3.0:                     # fiducial cut, see TRK_ABS_ETA_MAX
+        keep = np.abs(out["eta"]) <= ABS_ETA_MAX
+        for k, v in out.items():
+            if isinstance(v, np.ndarray):
+                out[k] = v[keep]
+        out["count"] = int(keep.sum())
     return out
 
 

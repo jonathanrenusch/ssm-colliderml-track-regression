@@ -895,9 +895,25 @@ class TrackRegressionWrapper(LightningModule):
     def forward(self, inputs: dict[str, Tensor]) -> dict[str, Tensor]:
         return self.model(inputs)
 
+    @staticmethod
+    def _deployment_anchors(outputs: dict[str, Tensor], targets: dict[str, Tensor]) -> dict[str, Tensor]:
+        """When the forward computed the seed itself (deployment auto-seed,
+        ``out["seed"]``), anchor ``predict_physical`` with THAT seed instead of
+        the collate's CPU seed, so metrics and written predictions measure the
+        fully deployed path (residual features AND anchors from the GPU seed).
+        A no-op whenever the batch carried the full feature set."""
+        seed = outputs.get("seed")
+        if seed is None:
+            return targets
+        t = dict(targets)
+        for i, n in enumerate(("d0", "z0", "phi", "theta", "qop")):
+            t[f"seed_{n}"] = seed[:, i]
+        return t
+
     def predict_step(self, batch, batch_idx):
         inputs, targets = batch
         outputs = self.model(inputs)
+        targets = self._deployment_anchors(outputs, targets)
         preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
         return preds, targets
 
@@ -950,7 +966,8 @@ class TrackRegressionWrapper(LightningModule):
 
             # Compute and log per-parameter metrics.
             # Use predict_physical to add back delta anchors for correct residuals.
-            preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
+            preds = self.model.loss_module.predict_physical(
+                outputs["pred"], self._deployment_anchors(outputs, targets))
             self._log_metrics(preds, targets, valid_mask, stage)
 
         return losses["total"]
@@ -1118,7 +1135,8 @@ class TrackRegressionWrapper(LightningModule):
             self.log(f"test/{name}", value, sync_dist=True)
 
         # Compute predictions and metrics (predict_physical adds back delta anchors)
-        preds = self.model.loss_module.predict_physical(outputs["pred"], targets)
+        preds = self.model.loss_module.predict_physical(
+            outputs["pred"], self._deployment_anchors(outputs, targets))
         self._log_metrics(preds, targets, valid_mask, "test")
 
         # Full quantile predictions (for quantile-based losses)

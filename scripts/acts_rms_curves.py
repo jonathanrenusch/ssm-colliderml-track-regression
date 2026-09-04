@@ -33,11 +33,22 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 from track_regression.eval_utils import iterative_rms_convergence  # noqa: E402
 
+import os
+
+# file-stem tag ("acts" for the in-pipeline refit pages, "truthkf" for the
+# production truth-tracking-KF reference) and the reference's legend label.
+TAG = os.environ.get("TRK_PLOT_TAG", "acts")
+REF = os.environ.get("TRK_REF_LABEL", "KF")
+# TRK_ABS_ETA_MAX: fiducial |eta| cut applied to every page (tracks AND axis
+# range).  Paper default 2.0 since 2026-09-04: the shipped truth-KF reference
+# is known to be miscalibrated above ~80 GeV outside |eta| < 2.
+ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
+
 PARAMS = ["d0", "z0", "phi", "theta", "qop"]
 MATH = {"d0": r"$d_0$", "z0": r"$z_0$", "phi": r"$\varphi$", "theta": r"$\theta$", "qop": r"$q/p$"}
 UNIT = {"d0": "µm", "z0": "µm", "phi": "mrad", "theta": "mrad", "qop": "$10^{-3}$/GeV"}
 SCALE = {"d0": 1e3, "z0": 1e3, "phi": 1e3, "theta": 1e3, "qop": 1e3}
-COL = {"SSM": "C0", "KF": "C3"}
+COL = {"SSM": "C0", REF: "C3"}
 ALPHA = 0.25
 
 
@@ -57,7 +68,9 @@ def _clip_rms(x):
 
 def _bins(v, var, nb=24):
     if var == "eta":
-        return np.linspace(-3.0, 3.0, nb + 1)
+        # keep the -3..3 bin width (0.25) whatever the fiducial cut
+        nb_cut = max(4, int(round(nb * ETA_MAX / 3.0)))
+        return np.linspace(-ETA_MAX, ETA_MAX, nb_cut + 1)
     # pT: uniform (linear) bins -- the uniform-pT muon sample is flat in pT, so
     # equal-width bins hold comparable track counts and are stable across the
     # full range; bins with < min tracks are dropped downstream.
@@ -91,6 +104,9 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
     truth, ssm, kf = truth[both], ssm[both], kf[both]
     th = truth[:, 3]
     eta = -np.log(np.tan(np.clip(th, 1e-8, np.pi - 1e-8) / 2.0))
+    if ETA_MAX < 3.0:                      # fiducial cut (see TRK_ABS_ETA_MAX above)
+        keep = np.abs(eta) <= ETA_MAX
+        truth, ssm, kf, eta, th = truth[keep], ssm[keep], kf[keep], eta[keep], th[keep]
     pt = np.sin(th) / np.maximum(np.abs(truth[:, 4]), 1e-12)
     N = len(truth)
 
@@ -110,7 +126,7 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
             rs = (_wrap(ssm[:, i] - truth[:, i]) if p == "phi" else ssm[:, i] - truth[:, i])
             rk = (_wrap(kf[:, i] - truth[:, i]) if p == "phi" else kf[:, i] - truth[:, i])
             curves = {}
-            for lab, resid in (("SSM", rs), ("KF", rk)):
+            for lab, resid in (("SSM", rs), (REF, rk)):
                 c, v, e = _curve(resid, xv, edges)
                 curves[lab] = (c, v * sc, e * sc)
                 urms, uk, un = _clip_rms(resid)
@@ -123,7 +139,7 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
             ax.set_title(MATH[p]); ax.set_ylim(bottom=0)
             ax.legend(loc="best", fontsize=6.6, framealpha=0.9,
                       handlelength=1.2, borderpad=0.25, labelspacing=0.2)
-            cs, vs, es = curves["SSM"]; ck, vk, ek = curves["KF"]
+            cs, vs, es = curves["SSM"]; ck, vk, ek = curves[REF]
             common, a, bxi = np.intersect1d(cs, ck, return_indices=True)
             if common.size:
                 r = vs[a] / vk[bxi]
@@ -131,22 +147,23 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                 axr.axhline(1.0, color="0.4", lw=0.8, ls=":")
                 axr.plot(common, r, "-", color="C0", lw=1.4)
                 axr.fill_between(common, r - re, r + re, color="C0", alpha=ALPHA, lw=0)
-            axr.set_ylabel("SSM/KF", fontsize=8); axr.set_xlabel(xlabel)
+            axr.set_ylabel(f"SSM/{REF}", fontsize=8); axr.set_xlabel(xlabel)
             if vname == "eta":
-                ax.set_xlim(-3, 3); axr.set_xlim(-3, 3)
+                ax.set_xlim(-ETA_MAX, ETA_MAX); axr.set_xlim(-ETA_MAX, ETA_MAX)
             plt.setp(ax.get_xticklabels(), visible=False)
         ax6 = fig.add_subplot(gs[5])
         ax6.hist(xv, bins=edges, histtype="step", color="0.3", lw=1.4)
         ax6.set_xlabel(xlabel); ax6.set_ylabel("tracks / bin")
         ax6.set_title("track distribution")
         if vname == "eta":
-            ax6.set_xlim(-3, 3)
+            ax6.set_xlim(-ETA_MAX, ETA_MAX)
+        cut_note = f"; $|\\eta| \\leq {ETA_MAX:g}$" if ETA_MAX < 3.0 else ""
         fig.suptitle(f"{ds} --- iterative-3$\\sigma$-clipped RMS vs {xlabel}; "
-                     f"total $N={N:,}$ tracks (fitted by both); "
+                     f"total $N={N:,}$ tracks (fitted by both){cut_note}; "
                      f"bands = analytic RMS error", y=0.995, fontsize=11)
-        fig.savefig(out_dir / f"{ds}_acts__{stem}.pdf", bbox_inches="tight")
+        fig.savefig(out_dir / f"{ds}_{TAG}__{stem}.pdf", bbox_inches="tight")
         plt.close(fig)
-        print(f"[rmscurve] {out_dir / f'{ds}_acts__{stem}.pdf'}", flush=True)
+        print(f"[rmscurve] {out_dir / f'{ds}_{TAG}__{stem}.pdf'}", flush=True)
 
 
 if __name__ == "__main__":

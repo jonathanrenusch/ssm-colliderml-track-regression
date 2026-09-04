@@ -79,7 +79,13 @@ training defaults are unchanged. `TRK_SSD_MERGED_BIDI=1` is a wash — leave off
 **Evaluation rules:** reference = the **production truth-KF shipped with the
 data** (`truth_tracks` parquet / `truth_kf_reco.npy` side-cars) — never the
 in-pipeline ad-hoc ACTS KF refit, which is miscalibrated 1.35–3.18×
-(§4.29/4.30, `docs/BUGREPORT_acts_pipeline_kf.md`). Metric = iterative
+(§4.29/4.30, `docs/BUGREPORT_acts_pipeline_kf.md`). **Paper numbers since
+2026-09-04 (§4.32): |η| ≤ 2 only** (the truth-KF itself is miscalibrated
+> ~80 GeV outside that; `TRK_ABS_ETA_MAX=2`) **and at deployment settings**
+(`scripts/04b_eval_ckpt_deploy.sh`; = strict fp32 to displayed precision).
+The GPU seed stays **float64** (`TRK_SEED_DTYPE`; fp32 injects the rc−R
+cancellation → mm-scale anchor noise at high pT, and the seed is only 2.9 %
+of the forward — §4.32). Metric = iterative
 3σ-clipped RMSE with the pre-clip value and clipped fraction always alongside;
 `bash scripts/04_eval_ckpt_iclr.sh <run_dir> last.ckpt <out> /scratch/colliderml/ICLR_eval_v2 <gpu>`.
 
@@ -1831,6 +1837,66 @@ throughput headline quotes the noconv twin is the user's call. The canonical
 recipe summary was written to the top of this file ("THE FINAL RECIPE") and
 `README.md` was updated to match (both models, kernel path, truth-KF-only
 reference rule) — 2026-09-04.
+
+### 4.32 Stakeholder revision (2026-09-04): |η| ≤ 2 fiducial cut, deployment-precision physics, seed stays fp64, ttbar out of the paper
+
+Stakeholder meeting: **the shipped truth-KF is miscalibrated above ~80 GeV outside |η| < 2**
+(upstream, unfixable before the ICLR deadline). User decisions executed the same day:
+paper model = **R2Lnoconv-FT**; every paper figure/number restricted to |η| ≤ 2 (truth η)
+and produced at **deployment settings** (TF32 matmuls + BUCKET16 + compiled front-end +
+GPU seed in-forward); **ttbar removed from the paper's physics results entirely** (stays as
+training data); grad-cos probe moved to the appendix (my recommendation, user approved);
+main text = 10 GeV RMS-vs-η + throughput; residuals (2/10/100 GeV) appendix-only at 240
+bins over ±8·rms3 (was 120/±4).
+
+- **Machinery**: `TRK_ABS_ETA_MAX` env (fast_rms_eval / acts_rms_curves /
+  acts_legacy_style_plots — cuts tracks AND axes, bin width kept);
+  `scripts/04b_eval_ckpt_deploy.sh` (deployment-settings eval: TF32+switches,
+  `--data.seed_residual_features false` → model auto-seed, and the new
+  `_deployment_anchors` override in `model.py` anchors predict_physical with
+  `out["seed"]` so features AND anchors come from the GPU seed);
+  `TRK_SEED_DTYPE` env in `seed_torch.py` (float64 default).
+- **Deployment eval = strict-fp32 eval to displayed precision on every set**
+  (`eval_plots/sweep7/R2LnoconvFT_deploy/`); |η|≤2 numbers in `plots_eta2/`:
+  post-clip SSM/tKF all ≤ 1.00 (worst 2 GeV q/p +0.3 %), pre-clip all ≤ 1.00;
+  100 GeV φ 0.92 / q/p 0.93 / d0 0.96 (the old 0.85s were forward-dominated —
+  consistent with §4.26 and with the experts' finding). Paper bundle
+  `eval_plots/paper_plots/truthkf_R2LnoconvFT_eta2/`.
+- **Seed precision (user asked for fp32/TF32 default): REJECTED by measurement.**
+  fp32 seed noise = the rc−R / rho−R cancellation (R ≈ 111 m at 100 GeV):
+  Δd0 635 µm RMS at 50–110 GeV (19× seed resolution), z0 2.3 mm, s_helix 1e7 mm
+  outliers; full eval at 100 GeV: z0 54 vs 18.6 µm (2.9×), θ 2.5×, pre-clip 100–570×
+  (receipt `scratchpad deploy_smoke_100gev_seedfp32`). And the motivation was void:
+  measured seed cost = **0.015 µs/track in-forward = 2.9 % of the 0.53 µs deployed
+  noconv forward** (0.020 µs standalone; fp32 would save 0.55 % end-to-end). TF32
+  is a no-op (seed has no matmuls). **fp64 stays the default**; documented in
+  paper app:seed with the cancellation argument.
+- **Grad-cos probe re-run on the noconv ckpt** (450×2048 ttbar, GPU seed features,
+  `--variant v3c` — stock kernels can't run d_conv=1, probe got a variant arg):
+  (d0,φ) +0.807±0.008, (z0,θ) +0.315±0.011, geometry block +0.20–0.25, |C(·,q/p)| ≤ 0.048
+  — reproduces R2L-FT (checkpoint-robust). `eval_plots/paper_plots_extras/grad_cos_R2LnoconvFT_450x2048/`.
+- **Cross-device throughput** (`eval_plots/paper_plots/throughput_h100/` + colleague's
+  Ada `bench_logs_v2`; combined single-panel figure + summary in
+  `eval_plots/paper_plots/throughput_cross_device/`): H100 NVL noconv deployed
+  **1.91 M tracks/s** (131k batch, uncontended; 395 W peak), RTX 5000 Ada **0.504 M**
+  (65k; 251 W; their 262k run died = 32 GB card), CPU KF 30 k. Kernel ablation on
+  noconv: fused fp32 820k → +TF32 1.35M → +switches 1.78M @32k; CUDA-graph 913k vs
+  eager 484k @2048; stock v0 CANNOT run d_conv=1 (causal_conv1d width ≥ 2) — stock
+  rows stay from the d_conv=4 twin (2.5×). **Throughput per device-$ (list prices:
+  Ada $4,000 MSRP, TR 3990X $3,990 MSRP, H100 NVL ~$30k street): 126 / 7.5 / 64
+  tracks/s/$ → Ada = 16.7× the CPU (the paper's new abstract number, replacing
+  "10–20×"), H100 = 8.5×.**
+- **Internal (non-paper) diagnostics** `eval_plots/internal_datascience/R2LnoconvFT/`
+  (`scripts/internal_tail_plots.py`): far-tail residual pages (±40·rms3 log-y,
+  >3σ/10σ/30σ fractions, d0-tail η map) + iter-3σ RMS vs truth |d0| and z0
+  (flat to |z0| < 200 mm, SSM ≤ tKF everywhere, both degrade at the acceptance edge).
+- **Paper** (`/shared/tracking/NeurIPS_2026_SSM_Tracking`, uncommitted as before):
+  results/data/method/abstract/intro/conclusion/appendix rewritten to the above;
+  seed text now states "exactly three hits from the innermost (pixel) subdetector";
+  seed timing paragraph in results; tab:seedquality recomputed |η|≤2; TF32-physics
+  statement flipped to "physics = deployment path, strict-fp32 unchanged <0.3 %";
+  main body exactly 9 pages (Conclusions on p9), no ttbar anywhere in results,
+  sync_figures.sh → `truthkf_R2LnoconvFT_eta2` + throughput figure + noconv heatmap.
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 

@@ -18,6 +18,7 @@ Usage: acts_legacy_style_plots.py <official_out_dir> <dataset_label> [kf_label]
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,9 +39,18 @@ from track_regression.paper_plots.plots._panels import fill_eta_stephist, make_g
 from track_regression.paper_plots.stats import DISPLAY_SCALE, DISPLAY_UNIT  # noqa: E402
 
 
+# TRK_ABS_ETA_MAX: fiducial |eta| cut on every page (paper default 2.0 since
+# 2026-09-04: the shipped truth-KF is miscalibrated above ~80 GeV, |eta| > 2).
+ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
+
+
 def load(out_dir: Path, kf_label: str):
     z = np.load(out_dir / "matched_residuals.npz")
     truth, ssm, kf = z["truth"], z["ssm"], z["kf"]
+    eta_all = -np.log(np.tan(np.clip(truth[:, 3], 1e-8, np.pi - 1e-8) / 2.0))
+    if ETA_MAX < 3.0:
+        keep = np.abs(eta_all) <= ETA_MAX
+        truth, ssm, kf = truth[keep], ssm[keep], kf[keep]
     has_ssm = np.isfinite(ssm[:, 0])
     has_kf = np.isfinite(kf[:, 0])
     both = has_ssm & has_kf
@@ -71,8 +81,11 @@ def residual_hist_pages(res: dict, out_dir: Path, dataset: str, subtitle: str, k
                 cut = iterative_rms_convergence(arr)
                 rms3, kept = cut["rms"], cut["n_kept"]
                 clip_pct = 100.0 * (1.0 - kept / max(len(arr), 1))
-                lo, hi = -4.0 * rms3, 4.0 * rms3
-                ax.hist(np.clip(arr, lo, hi) * scale, bins=120,
+                # +-8 rms3 at 240 bins (was +-4 / 120, 2026-09-04): the wider
+                # window shrinks the out-of-range towers at the edge bins while
+                # keeping the same bin width relative to the core.
+                lo, hi = -8.0 * rms3, 8.0 * rms3
+                ax.hist(np.clip(arr, lo, hi) * scale, bins=240,
                         range=(lo * scale, hi * scale), histtype="step",
                         color=colour, lw=1.6, density=True,
                         label=f"{tag}  iter-3σ = {rms3 * scale:.3g} {unit}\n"
@@ -95,12 +108,18 @@ def main():
     out_dir = Path(sys.argv[1])
     dataset = sys.argv[2]
     kf_label = sys.argv[3] if len(sys.argv) > 3 else "ACTS KF"
+    # TRK_PLOT_TAG: file-stem tag ("acts" = in-pipeline refit pages, "truthkf" =
+    # production truth-tracking-KF reference).  TRK_PLOT_SUBTITLE overrides the
+    # provenance line under the title (the default describes the ACTS event loop).
+    tag = os.environ.get("TRK_PLOT_TAG", "acts")
     res, n_ssm, n_kf = load(out_dir, kf_label)
-    subtitle = (f"association inside the ACTS event loop; subset fitted by both systems "
-                f"(SSM matched {n_ssm:,}, {kf_label} {n_kf:,} of {res['n_total']:,})")
-    make_plots(res, out_dir, f"{dataset}_acts", subtitle)
-    residual_hist_pages(res, out_dir, f"{dataset}_acts", subtitle, kf_label)
-    print(f"[legacy-style] wrote {dataset}_acts__* to {out_dir}", flush=True)
+    subtitle = os.environ.get(
+        "TRK_PLOT_SUBTITLE",
+        f"association inside the ACTS event loop; subset fitted by both systems "
+        f"(SSM matched {n_ssm:,}, {kf_label} {n_kf:,} of {res['n_total']:,})")
+    make_plots(res, out_dir, f"{dataset}_{tag}", subtitle)
+    residual_hist_pages(res, out_dir, f"{dataset}_{tag}", subtitle, kf_label)
+    print(f"[legacy-style] wrote {dataset}_{tag}__* to {out_dir}", flush=True)
 
 
 if __name__ == "__main__":

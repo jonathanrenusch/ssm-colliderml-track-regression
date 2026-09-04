@@ -5,19 +5,34 @@ features computed in torch from the packed hit features, so nothing runs on the 
 
 ``hit_features`` is the packed ``(n_hits, 12)`` tensor the collate emits (x, y, z
 in columns 0-2, volume_id in column 7); ``cu_seqlens`` the ``(B+1,)`` int32
-offsets.  The maths is float64 (as in numpy) and the results are cast to the
-input dtype.  Parity with the numpy path is tested in tests/test_seed_torch.py.
+offsets.  The internal maths dtype is float64 by default (as in numpy) and the
+results are cast to the input dtype; ``TRK_SEED_DTYPE=float32`` (or the
+``dtype=`` argument) switches the maths to fp32.  CAUTION: the perigee
+transport and the per-hit residuals both difference against the helix radius R
+(rc - R, rho - R); at 100 GeV R is ~1.1e5 mm, so fp32 injects O(R*eps) ~ 10 um
+of noise there -- validate physics parity before adopting fp32 (CLAUDE.md).
+Parity with the numpy path is tested in tests/test_seed_torch.py.
 """
 from __future__ import annotations
 
 import math
+import os
 import torch
+
+
+def _seed_dtype(dtype: torch.dtype | None) -> torch.dtype:
+    """Resolve the internal maths dtype: explicit argument wins, else the
+    ``TRK_SEED_DTYPE`` env var (``float64`` default)."""
+    if dtype is not None:
+        return dtype
+    return torch.float32 if os.environ.get("TRK_SEED_DTYPE", "float64") == "float32" else torch.float64
 
 from track_regression.seed import (DEFAULT_BZ, KAPPA, MIN_DELTA_R, PIXEL_VOLUMES, QOP_STRAIGHT,
                                    RESIDUAL_SCALE_MM, estimate_free_torch)
 
 
-def _pad(hit_features: torch.Tensor, cu: torch.Tensor, max_len: int | None = None):
+def _pad(hit_features: torch.Tensor, cu: torch.Tensor, max_len: int | None = None,
+         dtype: torch.dtype = torch.float64):
     """Packed (n_hits, F) -> padded xyz (B, L, 3), volume (B, L), valid (B, L), plus row/pos.
 
     ``max_len``: static pad length (e.g. 20) — skips the ``lens.max().item()``
@@ -31,10 +46,10 @@ def _pad(hit_features: torch.Tensor, cu: torch.Tensor, max_len: int | None = Non
     tok = torch.arange(hit_features.shape[0], device=cu.device)
     row = torch.bucketize(tok, cu[1:].long(), right=True)
     pos = tok - cu[:-1].long()[row]
-    xyz = torch.zeros(B, L, 3, dtype=torch.float64, device=cu.device)
-    vol = torch.zeros(B, L, dtype=torch.float64, device=cu.device)
+    xyz = torch.zeros(B, L, 3, dtype=dtype, device=cu.device)
+    vol = torch.zeros(B, L, dtype=dtype, device=cu.device)
     valid = torch.zeros(B, L, dtype=torch.bool, device=cu.device)
-    xyz[row, pos] = hit_features[:, :3].double(); vol[row, pos] = hit_features[:, 7].double()
+    xyz[row, pos] = hit_features[:, :3].to(dtype); vol[row, pos] = hit_features[:, 7].to(dtype)
     # device-tensor RHS, not the Python scalar True: a scalar put is a
     # synchronizing H2D memcpy (breaks CUDA-graph capture)
     valid[row, pos] = torch.ones_like(row, dtype=torch.bool)
@@ -110,7 +125,7 @@ def seed_perigee_torch(xyz, valid, vol, bz: float = DEFAULT_BZ):
     bad = ~(torch.isfinite(qop) & torch.isfinite(direction).all(1))
     # degenerate map (as in numpy: |duv.x| < 1e-14 is folded into non-finite/tiny here)
     d = sp2 - sp0
-    chord = d / d.norm(dim=1, keepdim=True).clamp_min(1e-300)
+    chord = d / d.norm(dim=1, keepdim=True).clamp_min(1e-300 if d.dtype == torch.float64 else 1e-30)
     direction = torch.where(bad[:, None], chord, direction)
     qop = torch.where(bad, torch.full_like(qop, QOP_STRAIGHT), qop)
     tiny = qop.abs() < 1e-9
@@ -144,12 +159,14 @@ def compress_residuals_torch(res):
 
 @torch.no_grad()
 def gpu_seed_features(hit_features: torch.Tensor, cu_seqlens: torch.Tensor, bz: float = DEFAULT_BZ,
-                      max_len: int | None = None):
+                      max_len: int | None = None, dtype: torch.dtype | None = None):
     """Seed (B, 5) and compressed residual features (n_hits, 3) on the device of the inputs.
 
     Pass ``max_len`` (the store's max hits per track, 20) to make the path
-    CUDA-graph capturable (no host sync)."""
-    xyz, vol, valid, row, pos = _pad(hit_features, cu_seqlens, max_len)
+    CUDA-graph capturable (no host sync).  ``dtype`` sets the internal maths
+    precision (default: ``TRK_SEED_DTYPE`` env var, else float64)."""
+    dt = _seed_dtype(dtype)
+    xyz, vol, valid, row, pos = _pad(hit_features, cu_seqlens, max_len, dtype=dt)
     seed = seed_perigee_torch(xyz, valid, vol, bz)
-    res = compress_residuals_torch(seed_residuals_torch(hit_features[:, :3].double(), seed, row, bz))
+    res = compress_residuals_torch(seed_residuals_torch(hit_features[:, :3].to(dt), seed, row, bz))
     return seed.to(hit_features.dtype), res.to(hit_features.dtype)

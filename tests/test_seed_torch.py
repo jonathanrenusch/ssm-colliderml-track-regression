@@ -8,7 +8,7 @@ torch = pytest.importorskip("torch")
 from track_regression.seed import seed_from_csr, seed_residuals, compress_residuals
 from track_regression.seed_torch import gpu_seed_features
 
-STORE = Path("/scratch/colliderml/ICLR_retraining_geom/single_muon_uniform/test/part_0000")
+STORE = Path("/scratch/colliderml/ICLR_retraining_v2/single_muon_uniform/test/part_0000")
 
 
 @pytest.mark.skipif(not STORE.exists(), reason="uniform test store not on this host")
@@ -21,7 +21,7 @@ def test_gpu_seed_features_match_numpy(device):
     row = np.repeat(np.arange(n), lens)
     res_np = compress_residuals(seed_residuals(H[:, :3], seed_np, row))
     cu = torch.from_numpy(np.r_[0, np.cumsum(lens)].astype(np.int32)).to(device)
-    seed_t, res_t = gpu_seed_features(torch.from_numpy(H).to(device), cu)
+    seed_t, res_t = gpu_seed_features(torch.from_numpy(H).to(device), cu, dtype=torch.float64)
     seed_t = seed_t.double().cpu().numpy(); res_t = res_t.double().cpu().numpy()
     dphi = np.angle(np.exp(1j * (seed_t[:, 2] - seed_np[:, 2])))
     assert np.abs(seed_t[:, 0] - seed_np[:, 0]).max() < 1e-3          # d0 [mm]  (float32 in/out)

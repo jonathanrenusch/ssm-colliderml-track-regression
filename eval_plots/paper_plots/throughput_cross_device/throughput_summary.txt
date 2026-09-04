@@ -1,0 +1,3 @@
+R2Lnoconv_2L deployment path (TF32 + kernel switches, GPU seed fp64), ttbar_bench store
+H100 NVL (NVIDIA H100 NVL (sm_90)): peak 1,909,918 tracks/s at bs 131,072; VRAM 14.6 GiB; peak power 395 W
+RTX 5000 Ada (NVIDIA RTX 5000 Ada Generation (sm_89)): peak 503,559 tracks/s at bs 65,536; VRAM 7.3 GiB; peak power 251 W
