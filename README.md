@@ -58,7 +58,10 @@ Bidirectional Mamba-2 encoder with CLS-token readout, packed (padding-free)
 batching, and a quantile regression head per parameter. The final models are
 **2 layers** (the paper model, Muon-hybrid fine-tuned; a 3-layer variant is
 identical in physics), `dim 128`, `d_state 64`, `headdim 32`, `expand 2`,
-`d_conv 4` — 0.65 M / 0.9 M parameters.
+`d_conv 4` — 0.65 M / 0.9 M parameters. A **conv-free twin** (`d_conv: 1`,
+no depthwise conv in the Mamba block) matches the paper model's physics to
+±0.005 in every metric and is the fastest deployed variant (1.89 M tracks/s,
+see throughput below).
 
 ## The final recipe
 
@@ -72,7 +75,9 @@ through three pixel space points (largest radial lever arm, conformal-map
 circle + sinc-corrected dz/ds) and transports it to the beamline perigee.
 Inputs: hit `x, y, z`, `volume_id`, and the constant 3 T field — reconstructed
 quantities only, no truth. A torch twin (`seed_torch.py`) runs the seed on the
-GPU at inference (+2 % forward time).
+GPU (+2 % forward time); at inference the model computes it **automatically
+inside `forward`** whenever a packed batch arrives with the 12 raw features
+(the seed is exposed as `out["seed"]`), so deployment feeds raw hits only.
 
 **2. Seed-residual input features.** Each hit enters the encoder as the 12
 absolute features (below) **plus 3 residuals to the seed helix**:
@@ -153,29 +158,46 @@ below the KF on every parameter of every set** (GM5 0.82–0.95; e.g. ttbar q/p
 post-clip): d0 13.9 / 14.3 µm, z0 21.4 / 21.6 µm, φ 0.167 / 0.177 mrad,
 θ 0.057 / 0.058 mrad, q/p 2.16 / 2.24 × 10⁻⁴ GeV⁻¹.
 
+**R2Lnoconv-FT** (the conv-free twin, `d_conv: 1`, same fine-tune) is equal to
+the paper model to ±0.005 GM5 on every set (worst single parameter: ttbar q/p
+1.02–1.03 post-clip) and keeps the pre-clip ≤ 1.0 property — it is the
+deployment model.
+
 ## Inference throughput
 
 The trigger-relevant comparison is against a multi-core CPU running the ACTS
 Kalman fit (~30 k tracks/s on a 64-core Threadripper) at matched hardware and
 energy cost — a workstation-class RTX 5000 Ada, benchmarked by a collaborator
-(in progress), where we expect an order-of-magnitude (up to ~20×) advantage.
-The H100 numbers below (32 k tracks/batch, GPU seed included) are shown only to
-isolate the kernel adaptation, not as the headline:
+(in progress), where we expect an order-of-magnitude advantage. The H100 NVL
+numbers below (GPU seed computed inside the forward, i.e. end-to-end from raw
+packed hits) isolate the kernel adaptation:
 
-| model | strict fp32 | TF32 matmuls | TF32 + kernel switches |
-|---|---|---|---|
-| 4L | 429 k tracks/s | 657 k | 730 k |
-| stock `mamba_ssm` kernels | 589 k | — | — |
-| **2L paper model, fused kernels** | 759 k | — | — |
-| **2L paper model, deployment path** | — | — | **1.48 M** |
-| 3L twin, deployment path | 540 k | 816 k | 1.05 M |
+| model (deployment path = TF32 + kernel switches, GPU seed) | 16 k/batch | 32 k | ≥ 64 k (plateau) | VRAM @ 120 k |
+|---|---|---|---|---|
+| **R2Lnoconv-FT (deployment model)** | 1.74 M tracks/s | 1.84 M | **1.89 M** | 13.3 GiB |
+| R2L-FT (paper model, `d_conv 4`) | — | — | 1.48 M | — |
+| 3-layer twin | — | 1.05 M | — | — |
+| 4L (campaign reference) | — | 730 k | — | — |
 
-Kernel switches = `TRK_SSD_BUCKET16=1` (16-token bucketing for the ~60 % of
-tracks with ≤16 hits) and `TRK_COMPILE_FRONTEND=1` (compiled
-normalise → Fourier → input-net front end). TF32 matmuls change the physics by
-≤ 2.3 % (100 GeV φ/q/p only); strict fp32 stays the default for training and
-physics numbers. Throughput saturates from ~16 k tracks/batch; benchmark with
-`scripts/bench_infer_flat.py --gpu-seed`.
+For scale: the 2L in strict fp32 with fused kernels alone runs 759 k tracks/s
+(stock `mamba_ssm` kernels: 589 k); the deployment path adds TF32 matmuls
+(×~1.5) and the kernel switches (+~10–35 %).
+
+**The deployment path** = fused v5pc Triton kernels + the seed computed on the
+GPU inside `forward` + `TRK_SSD_BUCKET16=1` (16-token bucketing for the ~60 %
+of tracks with ≤ 16 hits) + `TRK_COMPILE_FRONTEND=1` (compiled
+normalise → Fourier → input-net front end) + TF32 matmuls
+(`TRK_MATMUL_PRECISION=high`). TF32 was validated per test set: ≤ 0.3 % change
+on every parameter for the 2L models (worst: 100 GeV q/p). Strict fp32 remains
+the default for training and quoted physics numbers; the kernel switches are
+inference-only and leave training untouched.
+
+Benchmark with `scripts/bench_infer_flat.py` — the switches are **on by
+default** there (`--no-kernel-switches` reverts to the plain path). Throughput
+saturates from ~16 k tracks/batch. For the small-batch regime (≤ 4 k tracks,
+e.g. per-event streaming) use `--cuda-graph` instead: CUDA-graph capture with
+bit-exact dummy-track padding, +34–53 % at batch 2048 (incompatible with
+`TRK_SSD_BUCKET16`).
 
 ## Fast short-sequence SSM kernels (on by default)
 
@@ -205,6 +227,18 @@ apply_variant(model, "v5pc")   # fused Triton, packed — fastest inference
 apply_variant(model, "v3c")    # compiled pure-PyTorch — training / portable
 apply_variant(model, "v0")     # stock chunked kernel (reference)
 ```
+
+On top of the variant, three opt-in environment switches (all parity-tested,
+exact in fp32):
+
+| env var | effect | verdict |
+|---|---|---|
+| `TRK_SSD_BUCKET16=1` | routes ≤16-token tracks through a BL=16 launch | +6 % fp32 / +16 % TF32 — **use for large-batch inference** |
+| `TRK_COMPILE_FRONTEND=1` | `torch.compile` of normalise → Fourier → input net | +4–7 % — **use for inference** |
+| `TRK_SSD_MERGED_BIDI=1` | both scan directions in one launch | a wash at ≥32 k — leave off |
+
+`scripts/bench_infer_flat.py` sets the first two by default; training code and
+the repo-wide defaults are untouched (strict fp32, no switches).
 
 ## Layout
 
@@ -254,14 +288,15 @@ bash scripts/11_rebuild_stores_v2.sh
 # 4. mixed training store (muons + ttbar; val = muon val + ttbar val)
 pixi run -e default python scripts/07_build_mixed_store.py --extra-val ...
 
-# 5. train the final recipe (single H100, ~45 h for 25 epochs on the full mix)
+# 5. train the final recipe, stage 1 (single H100, ~45 h for 25 epochs on the full mix)
 cd src/track_regression
 pixi run -e default python train.py fit \
-  --config config/ssm_cls/ICLR_sweep5/YZ3L_qrel_3L_bs2048_onecycle25.yaml
+  --config config/ssm_cls/ICLR_sweep5/YZ2Lmix3_qrel_2L_bs2048_onecycle25.yaml
 
-# 6. optional tail-cleaning fine-tune (2x H100 DDP, Muon-hybrid + WSD)
+# 6. stage 2: tail-cleaning fine-tune (2x H100 DDP, Muon-hybrid + WSD;
+#    set pretrained_ckpt_path to stage 1's last.ckpt — absolute path)
 pixi run -e default python train.py fit \
-  --config config/ssm_cls/ICLR_sweep5/YZ3LFT_qrel_3L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml
+  --config config/ssm_cls/ICLR_sweep7/R2LFT_qrel_2L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml
 
 # 7. evaluate one checkpoint on every test set (plots + per-pT tables)
 bash scripts/04_eval_ckpt_iclr.sh <run_dir> last.ckpt <out_dir> <eval_farm_root> <gpu>
@@ -306,13 +341,23 @@ inference via `seed_torch.gpu_seed_features`).
 
 ## Evaluation
 
-- Reference: the **truth-tracking Kalman filter** (`truth_tracks`), the
-  strongest classical fit available; the CKF is no longer drawn.
+- Reference: the **truth-tracking Kalman filter shipped with the datasets**
+  (`truth_tracks` parquet / `truth_kf_reco.npy` side-cars), the strongest
+  classical fit available — fitted upstream on the real digitized measurements
+  and covariances. The CKF is no longer drawn, and the in-pipeline ad-hoc ACTS
+  KF *refit* must not be used as a resolution baseline: the Release-1 converter
+  substitutes default measurement covariances for the v2 per-cluster variances,
+  making that refit 1.4–3.2× worse than the shipped fit
+  (`docs/BUGREPORT_acts_pipeline_kf.md`).
 - Metric: iterative 3σ-clipped RMSE per parameter (plus the pre-clip RMSE and
   clipped fraction, always reported next to it), unbinned and binned in η / pT.
 - `scripts/04_eval_ckpt_iclr.sh` runs one checkpoint over all test stores and
   produces `rms_summary.{txt,json}`, `rms_by_pt.txt` and RMSE-vs-η figure
   bundles (`fast_rms_eval.py`, bootstrap-free, ~35 s per store).
+- Paper-figure bundles against the shipped truth-KF:
+  `scripts/run_truthkf_paper_plots.sh <pred_dir> <out_root>` (builds
+  `matched_residuals.npz` from the prediction h5 + `truth_kf_reco.npy`
+  side-cars, then the RMS-vs-η/pT and residual-histogram pages).
 - θ is the regressed and reported parameter; "vs η" plots bin in η but show θ
   residuals (σ_η ≈ σ_θ/sin θ).
 - **ACTS-side validation**: `scripts/acts_integration.py` (pyacts ≥ 47.5) runs
@@ -323,11 +368,14 @@ inference via `seed_torch.gpu_seed_features`).
   --seed-residual-features --d0-max 7.1 --z0-max 270 --pt-min 1 --pt-max 110`;
   the gen3 ODD geometry JSONs and the geoid map CSV are required inputs.
 
-## Official ACTS-pipeline evaluation (paper figures)
+## ACTS-pipeline evaluation (independent framework check)
 
-The paper's resolution figures are produced by embedding the model in the ACTS
-event loop and scoring it with ACTS's own performance writers — the same harness
-the classical fitters are qualified with. The pipeline is driven by
+The model is also embedded in the ACTS event loop and scored with ACTS's own
+performance writers — the same harness the classical fitters are qualified
+with. This serves as an **independent-framework and efficiency check**; the
+resolution *reference* in every figure remains the shipped truth-tracking KF
+(the in-loop KF refit is miscalibrated on v2 data, see Evaluation above). The
+pipeline is driven by
 `scripts/run_acts_official_plots.sh` (per dataset) and needs, besides the model
 checkpoint, a **pyacts** install (a self-contained venv at
 `/shared/tracking/pyacts_env`, pyacts 47.6.1) and the gen3 ODD geometry assets
@@ -351,7 +399,8 @@ of hits whose mapped surface projects out of bounds (a v2 producer bug: ~4 in
   histograms (linear + log), iterative-3σ RMS and surviving-track counts in the
   legends.
 - `scripts/paper_matrices.py` — the gradient-cosine matrix (diagonal saturates
-  the scale, ±std per cell) and the SSM prediction-vs-truth confusion matrix.
+  the scale, ±standard-error-on-the-mean per cell) and the SSM
+  prediction-vs-truth confusion matrix.
 
 Paper model = the 2-layer Muon-hybrid fine-tune (`R2L-FT`). The manuscript lives
 in `/shared/tracking/NeurIPS_2026_SSM_Tracking` (ICLR branch); its figures are
@@ -361,11 +410,11 @@ assembled under `material/iclr/` via `material/iclr/sync_figures.sh`.
 
 | config | what it is |
 |---|---|
-| `YZ3L_qrel_3L_bs2048_onecycle25.yaml` | **the recipe**: 3L, seed residuals + anchors, scale-free q/p, even weights, bs 2048, OneCycle 25 ep |
-| `YZ2Lmix3_qrel_2L_bs2048_onecycle25.yaml` | 2-layer model on the 3-way mix (the paper model before its fine-tune) |
-| `ICLR_sweep7/R2LFT_qrel_2L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | **the paper model**: Muon-hybrid fine-tune of the 2-layer, 1.48 M tracks/s deployed |
-| `YZ3LFT_qrel_3L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | 3-layer fine-tuned twin (identical physics) |
-| `YZ3L_qrel_3L_bs2048_onecycle25.yaml` | the 3L recipe pre-fine-tune |
+| `YZ2Lmix3_qrel_2L_bs2048_onecycle25.yaml` | **stage 1 of the recipe**: 2L, seed residuals + anchors, scale-free q/p, even weights, bs 2048, OneCycle 25 ep on the 3-way mix |
+| `ICLR_sweep7/R2LFT_qrel_2L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | **stage 2 → the paper model**: Muon-hybrid + WSD fine-tune of the 2-layer (cleans the residual tails) |
+| `ICLR_sweep7/R2Lnoconv_qrel_2L_dconv1_mix3_bs2048_onecycle25.yaml` | stage 1 of the conv-free twin (`d_conv: 1`) |
+| `ICLR_sweep7/R2LnoconvFT_qrel_2L_dconv1_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | **the deployment model**: fine-tuned conv-free twin, physics ≡ paper model, 1.89 M tracks/s |
+| `YZ3L_qrel_3L_bs2048_onecycle25.yaml` / `YZ3LFT_qrel_3L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | 3-layer twins (identical physics, 1.05 M tracks/s) |
 
 Head configuration that defines the recipe (from the YAML):
 
@@ -386,8 +435,9 @@ state-pool variants are parameter-matched baselines from campaign 1.
 ## Caveats and known issues
 
 - **Strict fp32 for training and physics numbers** (`TRK_MATMUL_PRECISION=highest`).
-  TF32 matmuls are a validated inference-only speed option (≤ 2.3 % physics
-  change); nothing below TF32 has been validated.
+  TF32 matmuls are a validated inference-only speed option (≤ 0.3 % on the 2L
+  final models, ≤ 2.3 % on the 4L — re-validate per checkpoint); nothing below
+  TF32 has been validated.
 - **Packed batching is required** for the seed-residual features and is the only
   path the flat store exercises; under DDP set
   `trainer.use_distributed_sampler: false` (the block sampler shards itself).

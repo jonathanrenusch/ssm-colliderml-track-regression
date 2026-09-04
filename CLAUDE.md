@@ -12,6 +12,87 @@ Related reports produced the same day:
 
 ---------------------------------------------------------------------------
 
+## THE FINAL RECIPE (canonical, 2026-09-04) — everything needed to reproduce or deploy the best model
+
+This section is self-contained; the rest of this file is the experiment log that
+established each ingredient (references in brackets). `README.md` carries the
+public version of the same recipe.
+
+**Best models (physics identical to ±0.005 GM5; both at or below the truth-KF
+on every parameter of every test set, pre-clip included):**
+
+| model | architecture | checkpoint | config (`src/track_regression/config/ssm_cls/`) | deployed throughput (1×H100 NVL) |
+|---|---|---|---|---|
+| **R2L-FT** — the paper model (user decision 2026-09-02) | 2 layers, dim 128, d_state 64, headdim 32, expand 2, d_conv 4 — 0.65 M params | `eval_plots/sweep7/R2LFT/ckpts/model.ckpt` | `ICLR_sweep7/R2LFT_qrel_2L_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | 1.48 M tracks/s |
+| **R2Lnoconv-FT** — the deployment twin (finished 2026-09-04, §4.31) | same, but `d_conv: 1` (no depthwise conv) | `eval_plots/sweep7/R2LnoconvFT/ckpts/model.ckpt` | `ICLR_sweep7/R2LnoconvFT_qrel_2L_dconv1_mix3_muonhybrid_ddp2_bs40k_wsd50.yaml` | **1.89 M tracks/s** |
+
+**Representation (the precision comes from here, not from capacity):**
+1. **ACTS three-point seed** (`seed.py` / `seed_torch.py`): exact port of
+   `Acts::estimateTrackParamsFromSeed`, three pixel space points, largest radial
+   lever arm, **Bz = 3.0 T** (§4.8 — 2 T is wrong), transported to the beamline
+   perigee. Inputs x, y, z, volume_id only. At inference the seed is computed on
+   the GPU **inside `TrackParameterRegressor.forward`** automatically when a
+   packed batch arrives with 12 features (`out["seed"]` exposed).
+2. **15 hit features** = 12 absolute (x, y, z, r, φ_hit, θ_hit, s, volume_id,
+   layer_id, surface_id, detector, η_hit) + 3 residuals to the seed helix:
+   asinh(du/0.1 mm), asinh(dv/0.1 mm), s_helix (§4.10 — the single largest
+   ingredient). Fourier scales 2⁻¹⁰…2⁵ (16 scales; removing Fourier breaks q/p,
+   §4.20 X).
+3. **Seed-anchored quantile heads, all loss weights 1.0** (§4.14): d0 ±0.4 mm,
+   z0 ±3.5 mm, θ ±0.01 rad, φ ±0.015 rad (Δφ wrapped), and the **scale-free q/p
+   head** — target `(q/p − seed_qop)/(|seed_qop| + 0.02)`, range ±2
+   (`scale_anchor_eps: 0.02`, §4.20 Y — closes low-pT/hadron q/p; an absolute
+   head stalls 5–10 % high). 7-quantile pinball ladders everywhere.
+4. **Hit order = detector geometry order** (`hit_sorting.geometry_order`, D.2):
+   truth-free, equals the ACTS sim-time order on ≥ 99.7 % of tracks. The packed
+   encoder never re-sorts — train and inference must feed the same order.
+
+**Data:** v2 stores (§4.17): 3 T perigee targets, |d0| ≤ 7.1 mm, |z0| ≤ 270 mm,
+|η| ≤ 3, 6–20 hits, ttbar 1–110 GeV; tables joined by id **values**, never rows
+(§0.4). Training store = `/scratch/colliderml/ICLR_retraining_v2_mix3`
+(387,290,426 train tracks = uniform-pT muons + log-pT muons + ttbar ≥ 1 GeV).
+Eval farm = `/scratch/colliderml/ICLR_eval_v2` (six test sets, truth-KF
+side-cars).
+
+**Training (two stages, strict IEEE fp32 = `TRK_MATMUL_PRECISION=highest`):**
+1. **Base**: Lion, **batch size 2048**, OneCycle 1e-5 → 5e-5 → 1e-6, wd 1e-3,
+   25 epochs on mix3 (~26 h on one H100). Small batch is load-bearing: the
+   precision arrives in the anneal; 36 k-batch runs lose 15–80 % on φ/q/p
+   (§4.21). Base configs: `ICLR_sweep5/YZ2Lmix3_qrel_2L_bs2048_onecycle25.yaml`
+   (d_conv 4) / `ICLR_sweep7/R2Lnoconv_qrel_2L_dconv1_mix3_bs2048_onecycle25.yaml`.
+2. **Fine-tune (tail cleaner)**: Muon-hybrid optimizer + WSD, DDP 2×20 k,
+   50 epochs from stage-1 `last.ckpt` (same head, same ranges — never widen
+   ranges on a kept head). Clipped RMSE unchanged; pushes the **pre-clip**
+   ratios ≤ 1.0 everywhere (§4.24, §4.31).
+
+**Inference/deployment kernel path** (physics-validated, §4.12/4.16/4.27):
+v5pc fused Triton kernels (`KernelSwapCallback` swaps automatically at
+val/test/predict) + GPU seed in-forward + `TRK_SSD_BUCKET16=1` +
+`TRK_COMPILE_FRONTEND=1` + TF32 matmuls (`TRK_MATMUL_PRECISION=high`; validated
+≤ 0.3 % on every test set for the 2L models, worst 100 GeV q/p). Batches
+≥ 16 k tracks (knee; plateau from 64 k, 13.3 GiB at 120 k). For the small-batch
+regime (≤ 4 k) use `--cuda-graph` instead (bit-exact dummy-track padding,
++34–53 % at bs 2048; incompatible with BUCKET16). `scripts/bench_infer_flat.py`
+has the switches **on by default** (`--no-kernel-switches` reverts); repo-wide
+training defaults are unchanged. `TRK_SSD_MERGED_BIDI=1` is a wash — leave off.
+
+**Evaluation rules:** reference = the **production truth-KF shipped with the
+data** (`truth_tracks` parquet / `truth_kf_reco.npy` side-cars) — never the
+in-pipeline ad-hoc ACTS KF refit, which is miscalibrated 1.35–3.18×
+(§4.29/4.30, `docs/BUGREPORT_acts_pipeline_kf.md`). Metric = iterative
+3σ-clipped RMSE with the pre-clip value and clipped fraction always alongside;
+`bash scripts/04_eval_ckpt_iclr.sh <run_dir> last.ckpt <out> /scratch/colliderml/ICLR_eval_v2 <gpu>`.
+
+**Result (post-clip SSM/truth-KF, CKF-DM subset; both best models):** GM5
+0.99 / 0.99 / 0.91 / 0.97 / 0.99 on µ 2 GeV / 10 GeV / 100 GeV / uniform /
+ttbar_new_pt1; worst single parameter q/p 1.01 (R2L-FT ttbar) / 1.03
+(noconv-FT ttbar); pre-clip GM5 0.83–0.95 with **no parameter above 1.0**.
+Absolute on uniform muons: d0 13.9 / 14.3 µm, z0 21.5 / 21.6 µm,
+φ 0.168 / 0.177 mrad, θ 0.057 / 0.058 mrad, q/p 2.18 / 2.24 × 10⁻⁴ GeV⁻¹
+(SSM / truth-KF, noconv-FT numbers).
+
+---------------------------------------------------------------------------
+
 ## 0. Read this first — three findings that gate everything else
 
 ### 0.1 The flat stores are sorted by the BROKEN time, not by `s` (blocking)
@@ -1630,6 +1711,52 @@ with the v2 schema break: `make_acts_compat_parquet.py` shims nested particle_id
 to the Release-1 layout the pyacts converter expects). Official ttbar numbers (both models, 237.7 k
 tracks): SSM matched 100.0 % vs ACTS-KF 74.6 %, Gaussian σ ratios 0.83–0.92 on all five params.
 
+### 4.28b Gradient-cosine probe rerun at 450x2048 — the (phi,q/p) block does NOT exist (2026-09-03, user request)
+
+`scripts/grad_cos_probe.py` on the paper checkpoint (`eval_plots/sweep7/R2LFT/ckpts/model.ckpt`,
+verified byte-identical to `logs/comet_offline/ae2dc434.../ckpts/last.ckpt` = the FINAL R2L-FT
+checkpoint), 450 x 2048 = **921,600 ttbar_new_pt1 tracks** (was 20 x 2048), out in
+`eval_plots/paper_plots_extras/grad_cos_R2LFT_450x2048/`.
+
+**The old figure's error bars were the wrong quantity.** `paper_matrices.py` annotated
+`mean +- std`, where `std` is the scatter of SINGLE-BATCH cosines — a per-batch gradient-noise
+floor set by the batch size, which does **not** shrink with more batches. The uncertainty on the
+plotted mean is `std/sqrt(N)`; at N=20 that was +-0.076, not the +-0.33 printed. Both are now
+written out (plus the full per-batch stack, so anything can be re-derived without a rerun) and the
+figure annotates the s.e.m.
+
+New numbers (mean +- s.e.m.): the matrix splits into a geometry block and curvature.
+`(d0,phi) +0.797+-0.008` (101 sigma), `(z0,theta) +0.361+-0.011` (32 sigma),
+`(phi,theta) +0.232+-0.014`, `(d0,theta) +0.228+-0.015`, `(z0,phi) +0.198+-0.014`,
+`(d0,z0) +0.190+-0.015`; q/p nearly orthogonal to all four (`|C| <= 0.065`,
+`(theta,qop) -0.000+-0.003`). **The paper's third headline pairing, "(phi,qop) bending at +0.11",
+is +0.065+-0.005 and is not a leading entry** — `sections/results.tex` + caption rewritten to the
+geometry-block / q/p-orthogonal framing, `sections/interpretability.tex` (dormant) flagged stale.
+`(d0,theta)` moved +0.095 -> +0.228 and `(d0,z0)` +0.129 -> +0.190: both ~2 sigma of the old
+s.e.m., i.e. the 20-batch numbers were simply noise-limited.
+
+Estimator checks done: batches are iid (lag-1 autocorr <= 0.08; chunk-to-chunk variance = the iid
+prediction to x0.93-1.00, so no part-level correlation inflating the s.e.m.); the eval sample comes
+from `ttbar_new_eval/v1`, disjoint from the `ttbar_new_train/v1` source in mix3 — no leakage.
+
+**A `pooled` estimator was added and is CONFOUNDED — do not quote it.** Cosine of gradients summed
+over all 921,600 tracks looks far stronger (geometry block +0.44..+0.95, `(d0,phi) +0.952`), but
+`systematic_frac` is only 0.12-0.19 (1.0 = a fixed direction every batch, 0.047 = pure noise at
+N=450) and projecting out the direction common to all five tasks collapses it:
+`(d0,z0) +0.67 -> -0.12`, `(z0,theta) +0.44 -> -0.29`, `(phi,qop) +0.09 -> -0.55`. The pooled block
+structure is almost entirely ONE shared direction — expected, since the model was fine-tuned on
+mix3 and probed on held-out ttbar under a plain-sum objective, so residual gradients roughly cancel.
+`mean` measures the correlation of per-track gradient FLUCTUATIONS (the GradNorm/PCGrad
+multi-task-interference quantity the paper cites) and is immune to a common offset. Only
+`(d0,phi)` survives all three views (+0.797 / +0.952 / +0.734). Kept in the npz as a diagnostic.
+
+Probe fixes alongside: one forward + five `autograd.grad` instead of 5 redundant forwards (and all
+five gradients now come from one identical forward); `std` via `np.std(ddof=1)` instead of the
+ill-conditioned `E[x^2]-E[x]^2`; `valid_mask=track_valid` passed as in training (all-True here, so
+a no-op); dead `head_prefixes` removed — it implied `pool_head` was excluded from the trunk when it
+never was (trunk = 632,928 params, unchanged). Refactor validated: reproduces the published 20-batch
+mean matrix to all three printed decimals.
+
 ### 4.29 The pipeline's ad-hoc ACTS KF is MISCALIBRATED (2026-09-03, user suspicion confirmed)
 
 Three-way check on uniform muons (200 k events, common subset 143 k tracks, identical residuals
@@ -1656,6 +1783,54 @@ consistent with all campaign tables); do NOT sell the 0.83–0.92 ratios vs the 
 as "beats the ACTS KF" — label that baseline "ACTS KF refit as configured in-pipeline" and
 report the calibration caveat to the ColliderML/pyacts producers (converter should ingest the
 digitized loc/var columns).**
+
+### 4.30 Paper switched to the shipped truth-KF reference (2026-09-03 evening) — plots + text done
+
+Executed the final instruction of `docs/BUGREPORT_acts_pipeline_kf.md` (drop the in-pipeline
+ad-hoc KF as a baseline everywhere):
+- **Plots.** `scripts/build_truthkf_residuals.py` (SSM h5 preds + `truth_kf_reco.npy` side-cars
+  → `matched_residuals.npz` on the same double-matched subset `fast_rms_eval` uses) driven by
+  the new `scripts/run_truthkf_paper_plots.sh <pred_dir> <out_root> [datasets]`; both plot
+  scripts are now reference-agnostic (`TRK_PLOT_TAG`, `TRK_REF_LABEL`, `TRK_PLOT_SUBTITLE`;
+  filenames `<ds>_truthkf__*`). Bundle for the paper model:
+  `eval_plots/paper_plots/truthkf_R2LFT/{single_muon_2GeV,10GeV,100GeV,uniform,ttbar,ttbar_new_pt1}/`
+  (rmscurve vs η for all, vs pT for uniform, residual-hist liny, fast_rms-design summaries).
+  Matched counts reproduce `eval_plots/sweep7/R2LFT/plots/rms_summary.json` `n_dm` exactly
+  (69,957 / 70,819 / 70,406 / 3,418,865 / 96,965 / 646,382) → figures and the paper's ratio
+  table are the same numbers.
+- **Paper** (`/shared/tracking/NeurIPS_2026_SSM_Tracking`, uncommitted): `material/iclr/sync_figures.sh`
+  now pulls from `truthkf_R2LFT` and the \ttbar pages come from `ttbar_new_pt1` (runs 6–45,
+  646,382 matched tracks — the sample the results table's \ttbar row already used, replacing the
+  ACTS-pipeline runs 6–15 / 238 k pages). Text: reference reframed as "the truth-seeded KF fits
+  shipped with the benchmark" in abstract comment, intro (×3), data, results, discussion,
+  conclusion; the ACTS pipeline is now an *independent framework check* only, with the
+  miscalibration caveat written into appendix §F (1.4–3.2×, z0 2.0× / θ 3.2×, converter
+  covariance mechanism). Efficiency restated **100.0 % vs 99.3 % of 199,760 uniform-muon
+  prototracks** (`eval_plots/paper_plots/acts_timefix/single_muon_uniform/report.txt`), the
+  74.6 %/25.4 % ttbar claim is gone. Integrated ttbar σ updated to 34.7 µm / 56.2 µm /
+  0.90 mrad / 0.415 mrad / 1.76e-3. Forensics numbers re-measured on the R2LFT truth-KF npz:
+  barrel 0.92–1.00, |η| 2.5–3 core 21/29/41 % tighter on d0/φ/q/p, q99.9 ratios 0.34–0.48,
+  θ barrel corr 0.996 at ratio 1.00. Build: `PATH=/cvmfs/sft.cern.ch/lcg/external/texlive/2025/bin/x86_64-linux:$PATH bash build.sh`
+  (the system texlive lacks fancyhdr) → 22 pages, no warnings.
+
+### 4.31 R2Lnoconv-FT done (2026-09-04 ~03:00) — the conv-free 2L matches the paper model; recipe canonicalised
+
+The Muon-hybrid + WSD 50-epoch DDP fine-tune of R2Lnoconv (d_conv 1, from
+`logs/comet_offline/8f7e4ac91f444d8ea19c6ea82f627adc/ckpts/last.ckpt`) finished
+on schedule; auto-eval `eval_plots/sweep7/R2LnoconvFT/` (v2 farm). Post-clip
+SSM/truth-KF GM5: 0.991 / 0.988 / 0.913 / 0.973 / 0.992 (µ 2 / 10 / 100 GeV /
+uniform / ttbar_new_pt1) — equal to R2L-FT to ±0.005; worst single parameter
+ttbar q/p 1.02–1.03 (R2L-FT: 1.01); **pre-clip: no parameter above 1.0 anywhere**
+(GM5 0.83–0.95, e.g. 100 GeV z0 0.70), the same tail profile as R2L-FT. So
+dropping the depthwise conv costs ~1–2 % on hadron q/p post-clip and nothing
+else → **R2Lnoconv-FT is the deployment model** (measured bs sweep, TF32 +
+switches, `eval_plots/sweep7/noconv_bs_sweep.txt`: 1.74 M tracks/s at bs 16 k,
+1.84 M at 32 k, plateau **1.89 M** from 64 k, 13.3 GiB VRAM at 120 k). The paper
+model stays R2L-FT per the user's 2026-09-02 decision; whether the paper's
+throughput headline quotes the noconv twin is the user's call. The canonical
+recipe summary was written to the top of this file ("THE FINAL RECIPE") and
+`README.md` was updated to match (both models, kernel path, truth-KF-only
+reference rule) — 2026-09-04.
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
