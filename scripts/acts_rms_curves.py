@@ -43,6 +43,12 @@ REF = os.environ.get("TRK_REF_LABEL", "KF")
 # range).  Paper default 2.0 since 2026-09-04: the shipped truth-KF reference
 # is known to be miscalibrated above ~80 GeV outside |eta| < 2.
 ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
+# TRK_PT_MAX: upper pT cap applied to the vs-pT page ONLY (tracks AND axis).
+# Paper default 90 since 2026-09-06: inside |eta|<=2 the reference's
+# high-momentum calibration defect turns on at ~95 GeV (transverse-parameter
+# core widening, flat in eta -- highpt_kf_calibration_study.py), so the
+# momentum-differential comparison is only calibration-grade below ~90 GeV.
+PT_MAX = float(os.environ.get("TRK_PT_MAX", "inf"))
 
 PARAMS = ["d0", "z0", "phi", "theta", "qop"]
 MATH = {"d0": r"$d_0$", "z0": r"$z_0$", "phi": r"$\varphi$", "theta": r"$\theta$", "qop": r"$q/p$"}
@@ -110,11 +116,16 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
     pt = np.sin(th) / np.maximum(np.abs(truth[:, 4]), 1e-12)
     N = len(truth)
 
-    variants = [("eta", eta, r"truth $\eta$", "rmscurve_vs_eta", 24)]
+    all_keep = np.ones(N, bool)
+    variants = [("eta", eta, r"truth $\eta$", "rmscurve_vs_eta", 24, all_keep)]
     if with_pt:
-        variants.append(("pT", pt, r"$p_{\mathrm{T}}$ [GeV]", "rmscurve_vs_pt", 18))
+        # the pT cap (TRK_PT_MAX) applies to the vs-pT page only
+        variants.append(("pT", pt, r"$p_{\mathrm{T}}$ [GeV]", "rmscurve_vs_pt", 18,
+                         pt <= PT_MAX if np.isfinite(PT_MAX) else all_keep))
 
-    for vname, xv, xlabel, stem, nb in variants:
+    for vname, xv_all, xlabel, stem, nb, keep in variants:
+        xv = xv_all[keep]
+        truth_v, ssm_v, kf_v, n_v = truth[keep], ssm[keep], kf[keep], int(keep.sum())
         edges = _bins(xv, vname, nb)
         fig = plt.figure(figsize=(15, 9.4))
         gs = GridSpec(2, 3, figure=fig, hspace=0.34, wspace=0.27)
@@ -123,8 +134,8 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                                           height_ratios=[3, 1], hspace=0.06)
             ax = fig.add_subplot(sub[0]); axr = fig.add_subplot(sub[1], sharex=ax)
             sc = SCALE[p]
-            rs = (_wrap(ssm[:, i] - truth[:, i]) if p == "phi" else ssm[:, i] - truth[:, i])
-            rk = (_wrap(kf[:, i] - truth[:, i]) if p == "phi" else kf[:, i] - truth[:, i])
+            rs = (_wrap(ssm_v[:, i] - truth_v[:, i]) if p == "phi" else ssm_v[:, i] - truth_v[:, i])
+            rk = (_wrap(kf_v[:, i] - truth_v[:, i]) if p == "phi" else kf_v[:, i] - truth_v[:, i])
             curves = {}
             for lab, resid in (("SSM", rs), (REF, rk)):
                 c, v, e = _curve(resid, xv, edges)
@@ -158,8 +169,10 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
         if vname == "eta":
             ax6.set_xlim(-ETA_MAX, ETA_MAX)
         cut_note = f"; $|\\eta| \\leq {ETA_MAX:g}$" if ETA_MAX < 3.0 else ""
+        if vname == "pT" and np.isfinite(PT_MAX):
+            cut_note += f"; $p_\\mathrm{{T}} \\leq {PT_MAX:g}$ GeV"
         fig.suptitle(f"{ds} --- iterative-3$\\sigma$-clipped RMS vs {xlabel}; "
-                     f"total $N={N:,}$ tracks (fitted by both){cut_note}; "
+                     f"total $N={n_v:,}$ tracks (fitted by both){cut_note}; "
                      f"bands = analytic RMS error", y=0.995, fontsize=11)
         fig.savefig(out_dir / f"{ds}_{TAG}__{stem}.pdf", bbox_inches="tight")
         plt.close(fig)

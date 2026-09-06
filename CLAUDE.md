@@ -1898,6 +1898,41 @@ bins over ±8·rms3 (was 120/±4).
   main body exactly 9 pages (Conclusions on p9), no ttbar anywhere in results,
   sync_figures.sh → `truthkf_R2LnoconvFT_eta2` + throughput figure + noconv heatmap.
 
+### 4.33 The high-pT gain inside |η|≤2 is ALSO the reference defect (2026-09-06) — vs-pT plot capped at 90 GeV
+
+User follow-up: the |η|≤2 cut did not remove the SSM's apparent gain above ~90 GeV in the
+uniform vs-pT figure. Study `scripts/highpt_kf_calibration_study.py` →
+`eval_plots/internal_datascience/R2LnoconvFT/highpt_kf_calibration/` (summary.txt + 7 pages):
+
+- **Onset ~95 GeV, transverse-circle parameters only.** Fine pT bins, |η|≤2, iter-3σ
+  SSM/tKF: every parameter 0.97–1.03 up to the 90–95 bin; then d0 0.98→0.93,
+  φ 0.96→0.85, q/p 0.98→0.83 (95–100 → 105–110 GeV) while **z0/θ stay 0.997–1.001
+  throughout**. q/p even flips sign of the gap (SSM 1–2.5 % WORSE at 60–90 GeV).
+- **Not an η-edge effect**: ratio vs |η| at pT>90 is FLAT 0–2 (φ ≈ 0.91 everywhere;
+  worst ratio 0.911 even inside |η|≤1) → no tighter η cut helps.
+- **Core effect, not tails**: core-68 ratio ≡ iter-3σ ratio (0.83–0.93), q99.9 ratio
+  LESS extreme (0.90–0.92), both estimators unbiased → the truth-KF's CORE widens.
+  Same signature at fixed 100 GeV: flat in truth |d0| and z0
+  (rms_vs_impact pages). Verdict: the known reference calibration defect is
+  momentum-driven and reaches inside |η|<2 from ~95 GeV; the earlier assumption
+  "calibration-grade at all momenta within |η|≤2" is WRONG (removed from the paper).
+  ⇒ the paper's 100 GeV transverse ratios (0.92–0.96) are NOT model gain.
+- **What to clip**: pT ≤ 90 (pmax scan: every 10-GeV-bin ratio ≥ 0.975); pmax=110
+  → 0.83. Implemented `TRK_PT_MAX` in `acts_rms_curves.py` (vs-pT page only, cuts
+  tracks AND axis, cap in the headline); paper default 90.
+- **Executed in the paper (FIGURES ONLY — user writes the text themselves)**:
+  `single_muon_uniform_rmscurve_pt.pdf` regenerated with TRK_PT_MAX=90 and synced
+  (ratios 0.97–1.00 across the whole axis now); new
+  `scripts/rms_vs_impact_npz.py` (house design, honors TRK_ABS_ETA_MAX) →
+  `single_muon_100GeV_truthkf__rms_vs_{absd0,z0}.pdf` in the eta2 bundle, synced
+  into `material/iclr/single_muon_100GeV_rms_vs_{absd0,z0}.pdf` for the user to
+  include (analysis-meeting request; full-acceptance twins under
+  internal_datascience/.../full_eta/). Problem-bin residual pages (80–90/90–100/
+  100–110 uniform + 95–105 of the 100 GeV set, log-y ±12σ, core/iter3σ/q99.9 in
+  legends) in the internal dir. My draft caveat text for results/appendix was
+  REVERTED at the user's request; only the false "calibration-grade at all
+  momenta" sentence stayed deleted.
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`
