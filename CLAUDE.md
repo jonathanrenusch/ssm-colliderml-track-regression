@@ -1933,6 +1933,56 @@ uniform vs-pT figure. Study `scripts/highpt_kf_calibration_study.py` →
   REVERTED at the user's request; only the false "calibration-grade at all
   momenta" sentence stayed deleted.
 
+### 4.34 Follow-up corrections round (2026-09-06): stock speedup is 3.0×/3.2× (not 2.5×), figure restyles, recipe double-checks
+
+User's follow-up list, executed the same day (paper TEXT untouched except the
+explicitly requested appendix figure + data-section reference):
+
+- **Stock-kernel speedup REMEASURED, uncontended (4 free GPUs), ttbar_bench
+  store, auto GPU seed fp64, iters 100** — logs
+  `eval_plots/paper_plots/throughput_h100/ablation/remeasure_2026-09-06/`:
+
+  | config | 32 k/batch | 131 k/batch |
+  |---|---|---|
+  | stock v0 fp32 (d_conv=4 twin R2L-FT; stock can't run d_conv=1) | 607.6 k | 600.2 k (plateaus early) |
+  | stock v0 TF32 (twin) | 833.3 k | 839.3 k |
+  | deployed twin (d_conv=4, TF32+switches) | 1.646 M | 1.699 M |
+  | **deployed noconv (final model)** | **1.849 M** | **1.913 M** |
+
+  → final model under full deployment config vs stock fp32: **3.04× @32 k,
+  3.19× at the plateau** (same-model twin: 2.71×/2.83×; vs the strongest stock
+  = TF32: 2.22×/2.28×). The paper's `\kernelSpeedup` = 2.5× and
+  `\stockThroughput` = 589 k are stale (the 589 k was measured with the
+  `--gpu-seed` wrapper on the uniform store, and the 2.5× paired it with a
+  contended deployed-twin number) — **numbers reported to the user in chat,
+  macros deliberately NOT edited (user writes the paper text)**.
+- **Final-recipe wall-clock (from launch_logs timestamps, sess3, possibly
+  contended by concurrent runs):** R2L-FT: stage 1 (Lion bs 2048, OneCycle
+  25 ep, mix3, 1×H100) 2026-08-31 09:24 → 09-01 18:06 = **32.7 h**; stage 2
+  (Muon-hybrid+WSD 50 ep, DDP 2×20 k) 09-01 20:56 → 09-02 14:24 = **17.5 h**
+  (2 GPUs ≈ 35 GPU·h). R2Lnoconv-FT twin: stage 1 **31.0 h** (09-01 20:56 →
+  09-03 03:58), stage 2 **15.9 h** (09-03 11:00 → 09-04 02:56).
+- **Recipe double-checks (verified from files):** the paper physics IS the
+  TF32 no-conv deployment path (`eval_R2LnoconvFT_deploy.log` header
+  `matmul=high bucket16=1 compile_frontend=1 seed_dtype=float64`, config
+  `d_conv: 1`; paper-table numbers == `R2LnoconvFT_deploy/plots_eta2/
+  rms_summary.txt`, figure-legend numbers match); the final recipe DOES use
+  the scale-free q/p head in both stages (`delta_anchor: seed_qop,
+  scale_anchor_eps: 0.02` in both sweep-7 noconv configs).
+- **Figure restyles:** cos heatmap re-rendered on a 0–1 "Blues" scale
+  (`paper_matrices.py` — the old probe render was vmin/vmax ±0.2 and clipped
+  the +0.81 entry; `grad_cos_probe.py` inline render matched; second argv "-"
+  = cosine-only). Throughput figure in the RMS-plot palette (both GPU curves
+  C0 = SSM, solid/dashed; CPU KF baseline = C3 dashed, moved INTO the legend,
+  legend center-right; `plot_throughput_cross_device.py`). New
+  `scripts/targets_kinematics_paper.py` → paper-styled targets/kinematics page
+  of the v2 uniform TRAIN store (C0 step + alpha-0.25 fill; the 08-23
+  dataset_plots page was from the deprecated pre-v2 store) →
+  `eval_plots/paper_plots/targets_kinematics/`, synced and added to the paper
+  as app:simchain figure `fig:target-distributions` + one \cref in data.tex
+  (both explicitly requested). Paper rebuilt: 23 pages, Conclusions still p9,
+  0 broken refs.
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`

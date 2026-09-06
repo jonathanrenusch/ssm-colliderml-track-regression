@@ -200,12 +200,14 @@ def main():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(4.6, 4.0))
-    im = ax.imshow(mean, vmin=-0.2, vmax=0.2, cmap="RdBu_r")
+    # 0..1 scale, matching scripts/paper_matrices.py (the paper re-render):
+    # all mean entries are >= 0 and the old +-0.2 window clipped the large ones.
+    im = ax.imshow(np.clip(mean, 0.0, 1.0), vmin=0.0, vmax=1.0, cmap="Blues")
     disp = np.where(np.eye(5, dtype=bool), 1.0, mean)
     for i in range(5):
         for j in range(5):
             ax.text(j, i, f"{disp[i, j]:+.2f}", ha="center", va="center",
-                    fontsize=9, color="black")
+                    fontsize=9, color="white" if disp[i, j] > 0.6 else "black")
     ax.set_xticks(range(5), LABELS); ax.set_yticks(range(5), LABELS)
     ax.set_title("Trunk-gradient cosine similarity")
     fig.colorbar(im, ax=ax, shrink=0.85, label="mean cosine")

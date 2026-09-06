@@ -69,24 +69,29 @@ def parse(log_dir: Path):
 def main():
     ada_dir, h100_dir, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
     out.mkdir(parents=True, exist_ok=True)
+    # RMS-plot palette (user, 2026-09-06): the SSM is C0 blue on every
+    # performance page and the KF reference is C3 red -- keep that mapping
+    # here.  The two GPU curves are both the SSM, so both are C0, told apart
+    # by line style and marker; the CPU KF baseline enters the LEGEND (no
+    # free-floating text) as the C3 dashed line.
     devices = []
-    for d, color, short in ((h100_dir, "C0", "H100 NVL"), (ada_dir, "C1", "RTX 5000 Ada")):
+    for d, style, short in ((h100_dir, dict(color="C0", ls="-", marker="o", mfc="C0"), "H100 NVL"),
+                            (ada_dir, dict(color="C0", ls="--", marker="s", mfc="white"), "RTX 5000 Ada")):
         name, thr, vram, power = parse(d)
         if not thr:
             raise SystemExit(f"no complete {MODEL} logs in {d}")
-        devices.append((short, name, color, thr, vram, power))
+        devices.append((short, name, style, thr, vram, power))
 
     fig, ax_t = plt.subplots(figsize=(5.4, 3.5))
-    for short, name, color, thr, vram, power in devices:
+    for short, name, style, thr, vram, power in devices:
         bs = sorted(thr)
-        ax_t.plot(bs, [thr[b] / 1e6 for b in bs], "o-", ms=3.5, lw=1.6,
-                  color=color, label=f"{short}: {max(thr.values())/1e6:.2f} M tracks/s peak")
-    ax_t.axhline(CPU_REF / 1e6, color="0.35", lw=1.2, ls="--")
-    ax_t.text(300, CPU_REF / 1e6 * 1.35, "ACTS KF fit, 64-core CPU (30 k tracks/s)",
-              fontsize=7.5, color="0.35")
+        ax_t.plot(bs, [thr[b] / 1e6 for b in bs], ms=3.5, lw=1.6, **style,
+                  label=f"SSM, {short}: {max(thr.values())/1e6:.2f} M tracks/s peak")
+    ax_t.axhline(CPU_REF / 1e6, color="C3", lw=1.4, ls="--",
+                 label=f"ACTS KF fit, 64-core CPU: {CPU_REF/1e3:.0f} k tracks/s")
     ax_t.set_xscale("log", base=2); ax_t.set_yscale("log")
     ax_t.set_xlabel("tracks per batch"); ax_t.set_ylabel("throughput [$10^6$ tracks/s]")
-    ax_t.legend(fontsize=8, loc="lower right")
+    ax_t.legend(fontsize=7.5, loc="center right", framealpha=0.9)
     ax_t.grid(True, which="both", ls=":", alpha=0.35)
     fig.tight_layout()
     stem = out / "throughput_noconv_h100_vs_ada"
