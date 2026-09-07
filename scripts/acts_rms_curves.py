@@ -133,7 +133,7 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
         gs = GridSpec(2, 3, figure=fig, hspace=0.34, wspace=0.27)
         for i, p in enumerate(PARAMS):
             sub = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs[i],
-                                          height_ratios=[3, 1], hspace=0.10)
+                                          height_ratios=[3, 1], hspace=0.06)
             ax = fig.add_subplot(sub[0]); axr = fig.add_subplot(sub[1], sharex=ax)
             sc = SCALE[p]
             rs = (_wrap(ssm_v[:, i] - truth_v[:, i]) if p == "phi" else ssm_v[:, i] - truth_v[:, i])

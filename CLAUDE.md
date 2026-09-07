@@ -2028,6 +2028,22 @@ schema, truth_tracks included). Pipeline executed:
   the strip's top tick label pruned (MaxNLocator nbins=4 prune=upper). The
   four paper pages (2/10/50 GeV vs-η + uniform vs-pT@70) regenerated and
   synced; wide-range panels (θ, low-pT z0/q-p, all vs-pT) keep the zero anchor.
+- **Restyle follow-up (user)**: the hspace bump was REVERTED (0.10 → 0.06 —
+  user liked the original layout; the pruned top tick alone fixes the
+  collision); the four paper pages regenerated + synced again.
+- **Covariance-head throughput test (user request, measured on GPU 0
+  uncontended, logs `eval_plots/paper_plots/throughput_h100/ablation/
+  covhead_2026-09-07/`)**: untrained noconv twins with 35 vs 50 head outputs
+  (7- vs 10-quantile ladders — identical code path; output_head final layer
+  (35,128) → (50,128), +1,935 of 0.649 M params; the output head alone is
+  ~21 k ≈ 0.02 M). Interleaved repeats, deployment path, ttbar_bench:
+  32 k/batch 1.851 M (q7 mean) vs 1.838 M (q10 mean), paired deltas
+  −0.9 %/−0.5 %; 131 k plateau 1.880 vs 1.873 M (−0.35 %) — the
+  covariance-width head costs < 1 %, within run-to-run repeatability, because
+  the head runs once per track vs the encoder per hit. **One clarifying
+  sentence added to the paper's throughput subsection (user-sanctioned)**;
+  first draft as its own paragraph pushed the main body to 10 pages —
+  compressed and merged into the seed-timing paragraph, back to 9.
 - **tab:ratios uniform row recut at pT ≤ 70 too (user, same day)**: recomputed
   from the eta2 uniform `matched_residuals.npz` with |η| ≤ 2 ∧ pT ≤ 70
   (N = 1,412,216; the no-cut recomputation reproduces the old row exactly, so
