@@ -1983,6 +1983,37 @@ explicitly requested appendix figure + data-section reference):
   (both explicitly requested). Paper rebuilt: 23 pages, Conclusions still p9,
   0 broken refs.
 
+### 4.35 NEW TEST SET single_muon_50GeV (2026-09-07) — replaces 100 GeV as the paper's measurement-dominated sample
+
+The 100 GeV reference-calibration defect (§4.33, onset ~95 GeV) will not be
+fixed before the deadline, so a 50 GeV gun was produced
+(`portal .../drift_beamspot/single_muon_50GeV/`, 100 k events, nested v2
+schema, truth_tracks included). Pipeline executed:
+- fetched with `06b_fetch_nersc_flat.sh` (129 MB, 5 tables incl. simhits, 0
+  mismatches); preprocessed with the exact v2 recipe (`--sort-key true_time
+  --bz 3.0 --apply-d0z0-windows --d0-window 7.1 --z0-window 270`) →
+  `ICLR_retraining_v2/single_muon_50GeV` (99,954 tracks, one 'train' shard,
+  truth-KF side-car 99.97 % matched); farm entry added (`build_eval_farm.py
+  --union single_muon_50GeV`); raw + store published to /eos and verified.
+- **Deployment eval** (extends `eval_plots/sweep7/R2LnoconvFT_deploy/`;
+  `plots/` and `plots_eta2/` regenerated with the new set — other rows
+  unchanged). |η| ≤ 2: SSM 12.2 µm / 15.5 µm / 0.126 mrad / 0.070 mrad /
+  2.13e-4 vs truth-KF 12.2 / 15.5 / 0.129 / 0.070 / 2.12e-4 (N = 46,331);
+  ratios post-clip 1.00/1.00/0.98/1.00/1.01, pre-clip 0.99/0.96/0.98/1.00/1.01
+  — **honest parity, no reference-defect signature at 50 GeV** (consistent
+  with the §4.33 onset at ~95 GeV; the ratio-vs-η strip is flat at 0.97–1.03).
+- Paper pages `eval_plots/paper_plots/truthkf_R2LnoconvFT_eta2/single_muon_50GeV/`
+  (rmscurve_vs_eta, residual_hist_liny, npz). **Paper edits (user-sanctioned
+  scope only)**: tab:ratios 100 GeV row → 50 GeV row; the two supplement
+  figures swapped (paths/captions/labels → `fig:app-{reta,resid}-single_muon_50GeV`);
+  sync_figures.sh loop 100→50. **Prose still says 100 GeV in**: results.tex
+  120–122 ("At 100 GeV the SSM is 4–8 % below…", "The 2 GeV and 100 GeV
+  … curves"), data.tex 53–54 ("fixed pT of 2, 10, and 100 GeV"),
+  method.tex 126 (TF32 worst case), appendix 306/315 (seed-fp32 argument) —
+  left for the user by instruction. The 100 GeV set stays on disk/eos for
+  internal diagnostics; `material/iclr/single_muon_100GeV_*.pdf` files remain
+  but are no longer referenced by the tex.
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`

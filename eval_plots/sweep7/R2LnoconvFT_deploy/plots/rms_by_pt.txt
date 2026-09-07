@@ -12,6 +12,11 @@ single_muon_2GeV — iter-3sigma RMSE per pT bin, SSM / truth-KF
          1-2    17,398              48.5/49.3                161/164              1.41/1.42            0.404/0.415      1.78e-03/1.74e-03
          2-3    52,559              43.9/44.6                105/106              1.23/1.24            0.472/0.482      2.02e-03/2.01e-03
 
+single_muon_50GeV — iter-3sigma RMSE per pT bin, SSM / truth-KF
+    pT [GeV]         N                  d0 µm                  z0 µm               phi mrad             theta mrad              qop 1/GeV
+       20-50    20,492              13.3/13.4              21.4/21.6            0.160/0.164            0.036/0.038      1.93e-04/1.92e-04
+      50-110    50,599              13.1/13.1              19.5/19.6            0.151/0.154            0.050/0.050      2.06e-04/2.04e-04
+
 single_muon_uniform — iter-3sigma RMSE per pT bin, SSM / truth-KF
     pT [GeV]         N                  d0 µm                  z0 µm               phi mrad             theta mrad              qop 1/GeV
          1-2    30,655              56.8/57.6                156/158              1.69/1.70            0.608/0.623      2.66e-03/2.58e-03
