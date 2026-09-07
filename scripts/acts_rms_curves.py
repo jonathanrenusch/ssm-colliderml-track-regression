@@ -28,6 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec  # noqa: E402
+from matplotlib.ticker import MaxNLocator  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
@@ -132,7 +133,7 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
         gs = GridSpec(2, 3, figure=fig, hspace=0.34, wspace=0.27)
         for i, p in enumerate(PARAMS):
             sub = GridSpecFromSubplotSpec(2, 1, subplot_spec=gs[i],
-                                          height_ratios=[3, 1], hspace=0.06)
+                                          height_ratios=[3, 1], hspace=0.10)
             ax = fig.add_subplot(sub[0]); axr = fig.add_subplot(sub[1], sharex=ax)
             sc = SCALE[p]
             rs = (_wrap(ssm_v[:, i] - truth_v[:, i]) if p == "phi" else ssm_v[:, i] - truth_v[:, i])
@@ -148,7 +149,19 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                               f"({100*clipped/max(un,1):.1f}% clipped)")
                 ax.fill_between(c, (v - e) * sc, (v + e) * sc, color=COL[lab], alpha=ALPHA, lw=0)
             ax.set_ylabel(f"iter-3$\\sigma$ RMS({MATH[p]}) [{UNIT[p]}]", fontsize=9)
-            ax.set_title(MATH[p]); ax.set_ylim(bottom=0)
+            ax.set_title(MATH[p])
+            # y range: anchor at 0 only when the curves actually span a wide
+            # range; a flat curve on a zero-anchored axis is a line with its
+            # shape compressed away (user 2026-09-07), so zoom to the data
+            # with padding (extra on top so the legend has room).
+            vals = [(v, e) for _, v, e in curves.values() if v.size]
+            lo = min(float(np.nanmin(v - e)) for v, e in vals) if vals else 0.0
+            hi = max(float(np.nanmax(v + e)) for v, e in vals) if vals else 1.0
+            if lo > 0.4 * hi:
+                span = max(hi - lo, 1e-12 * max(hi, 1e-30))
+                ax.set_ylim(lo - 0.15 * span, hi + 0.45 * span)
+            else:
+                ax.set_ylim(bottom=0)
             ax.legend(loc="best", fontsize=6.6, framealpha=0.9,
                       handlelength=1.2, borderpad=0.25, labelspacing=0.2)
             cs, vs, es = curves["SSM"]; ck, vk, ek = curves[REF]
@@ -160,6 +173,9 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                 axr.plot(common, r, "-", color="C0", lw=1.4)
                 axr.fill_between(common, r - re, r + re, color="C0", alpha=ALPHA, lw=0)
             axr.set_ylabel(f"SSM/{REF}", fontsize=8); axr.set_xlabel(xlabel)
+            # no tick label at the strip's very top: it collided with the main
+            # panel's bottom tick label (user 2026-09-07)
+            axr.yaxis.set_major_locator(MaxNLocator(nbins=4, prune="upper"))
             if vname == "eta":
                 ax.set_xlim(-ETA_MAX, ETA_MAX); axr.set_xlim(-ETA_MAX, ETA_MAX)
             plt.setp(ax.get_xticklabels(), visible=False)

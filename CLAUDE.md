@@ -2020,6 +2020,14 @@ schema, truth_tracks included). Pipeline executed:
   show, on top of the ~95 GeV reference defect. Paper default in
   `acts_rms_curves.py` comment updated; caption untouched (sample is still
   1–110 GeV, the cap lives in the figure headline).
+- **RMS-vs-η/pT page restyle (user, same day)**, `acts_rms_curves.py`: (i) the
+  main panel anchors y at 0 only when the curves span a wide range (lo ≤
+  0.4·hi incl. bands); flat curves (50 GeV d0/z0/φ, 2 GeV d0/φ, 10 GeV d0/φ)
+  now zoom to the data with 15 %/45 % bottom/top padding so the shape is
+  visible; (ii) ratio strip de-crowded: sub-gridspec hspace 0.06 → 0.10 and
+  the strip's top tick label pruned (MaxNLocator nbins=4 prune=upper). The
+  four paper pages (2/10/50 GeV vs-η + uniform vs-pT@70) regenerated and
+  synced; wide-range panels (θ, low-pT z0/q-p, all vs-pT) keep the zero anchor.
 - **tab:ratios uniform row recut at pT ≤ 70 too (user, same day)**: recomputed
   from the eta2 uniform `matched_residuals.npz` with |η| ≤ 2 ∧ pT ≤ 70
   (N = 1,412,216; the no-cut recomputation reproduces the old row exactly, so
