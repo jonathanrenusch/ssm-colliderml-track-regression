@@ -44,10 +44,11 @@ REF = os.environ.get("TRK_REF_LABEL", "KF")
 # is known to be miscalibrated above ~80 GeV outside |eta| < 2.
 ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
 # TRK_PT_MAX: upper pT cap applied to the vs-pT page ONLY (tracks AND axis).
-# Paper default 90 since 2026-09-06: inside |eta|<=2 the reference's
-# high-momentum calibration defect turns on at ~95 GeV (transverse-parameter
-# core widening, flat in eta -- highpt_kf_calibration_study.py), so the
-# momentum-differential comparison is only calibration-grade below ~90 GeV.
+# Inside |eta|<=2 the reference's high-momentum calibration defect turns on at
+# ~95 GeV (transverse-parameter core widening, flat in eta --
+# highpt_kf_calibration_study.py), so the momentum-differential comparison is
+# only calibration-grade below ~90 GeV. Paper default 70 since 2026-09-07
+# (user: behaviour above that is not understood well enough to show).
 PT_MAX = float(os.environ.get("TRK_PT_MAX", "inf"))
 
 PARAMS = ["d0", "z0", "phi", "theta", "qop"]

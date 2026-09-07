@@ -2013,6 +2013,13 @@ schema, truth_tracks included). Pipeline executed:
   left for the user by instruction. The 100 GeV set stays on disk/eos for
   internal diagnostics; `material/iclr/single_muon_100GeV_*.pdf` files remain
   but are no longer referenced by the tex.
+- **vs-pT cap tightened 90 → 70 GeV (user, same day)**: the paper's uniform
+  RMS-vs-pT page regenerated with `TRK_PT_MAX=70` (N = 1,412,216, ratio strips
+  0.97–1.01 flat, cap stated in the headline) and synced; the user's rationale
+  is that network behaviour above ~70 GeV is not understood well enough to
+  show, on top of the ~95 GeV reference defect. Paper default in
+  `acts_rms_curves.py` comment updated; caption untouched (sample is still
+  1–110 GeV, the cap lives in the figure headline).
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
