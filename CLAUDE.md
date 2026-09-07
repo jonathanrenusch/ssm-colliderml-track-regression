@@ -2020,6 +2020,13 @@ schema, truth_tracks included). Pipeline executed:
   show, on top of the ~95 GeV reference defect. Paper default in
   `acts_rms_curves.py` comment updated; caption untouched (sample is still
   1–110 GeV, the cap lives in the figure headline).
+- **tab:ratios uniform row recut at pT ≤ 70 too (user, same day)**: recomputed
+  from the eta2 uniform `matched_residuals.npz` with |η| ≤ 2 ∧ pT ≤ 70
+  (N = 1,412,216; the no-cut recomputation reproduces the old row exactly, so
+  like-for-like). Row relabelled "µ, 1–70 GeV": post-clip
+  0.99/1.00/**0.98**/1.00/**1.01** (was φ 0.97, q/p 0.99 — the sub-1 φ/q-p in
+  the uncut row was the >70 GeV region), pre-clip unchanged
+  0.98/0.96/0.98/0.98/0.96.
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
