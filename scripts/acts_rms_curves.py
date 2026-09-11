@@ -51,6 +51,10 @@ ETA_MAX = float(os.environ.get("TRK_ABS_ETA_MAX", "3.0"))
 # only calibration-grade below ~90 GeV. Paper default 70 since 2026-09-07
 # (user: behaviour above that is not understood well enough to show).
 PT_MAX = float(os.environ.get("TRK_PT_MAX", "inf"))
+# TRK_PRECLIP=1: plain (un-clipped, tail-inclusive) RMS instead of the
+# iterative-3-sigma clip, same page design; output stems get "_preclip".
+# Appendix supplement pages (reviewer request, 2026-09-11).
+PRECLIP = os.environ.get("TRK_PRECLIP", "0") == "1"
 
 PARAMS = ["d0", "z0", "phi", "theta", "qop"]
 MATH = {"d0": r"$d_0$", "z0": r"$z_0$", "phi": r"$\varphi$", "theta": r"$\theta$", "qop": r"$q/p$"}
@@ -65,11 +69,13 @@ def _wrap(a):
 
 
 def _clip_rms(x):
-    """iterative-3sigma RMS, kept count, total."""
+    """iterative-3sigma RMS, kept count, total (plain RMS under TRK_PRECLIP=1)."""
     x = np.asarray(x, float)
     x = x[np.isfinite(x)]
     if x.size == 0:
         return np.nan, 0, 0
+    if PRECLIP:
+        return float(np.sqrt(np.mean(x ** 2))), int(x.size), int(x.size)
     r = iterative_rms_convergence(x)
     return float(r["rms"]), int(r["n_kept"]), int(x.size)
 
@@ -144,11 +150,12 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
                 curves[lab] = (c, v * sc, e * sc)
                 urms, uk, un = _clip_rms(resid)
                 clipped = un - uk
+                note = "(un-clipped)" if PRECLIP else f"({100*clipped/max(un,1):.1f}% clipped)"
                 ax.plot(c, v * sc, "-", color=COL[lab], lw=1.8,
-                        label=f"{lab}: {urms*sc:.3g} {UNIT[p]}\n"
-                              f"({100*clipped/max(un,1):.1f}% clipped)")
+                        label=f"{lab}: {urms*sc:.3g} {UNIT[p]}\n{note}")
                 ax.fill_between(c, (v - e) * sc, (v + e) * sc, color=COL[lab], alpha=ALPHA, lw=0)
-            ax.set_ylabel(f"iter-3$\\sigma$ RMS({MATH[p]}) [{UNIT[p]}]", fontsize=9)
+            est = "RMS" if PRECLIP else "iter-3$\\sigma$ RMS"
+            ax.set_ylabel(f"{est}({MATH[p]}) [{UNIT[p]}]", fontsize=9)
             ax.set_title(MATH[p])
             # y range: anchor at 0 only when the curves actually span a wide
             # range; a flat curve on a zero-anchored axis is a line with its
@@ -188,7 +195,10 @@ def draw(out_dir: Path, ds: str, with_pt: bool):
         cut_note = f"; $|\\eta| \\leq {ETA_MAX:g}$" if ETA_MAX < 3.0 else ""
         if vname == "pT" and np.isfinite(PT_MAX):
             cut_note += f"; $p_\\mathrm{{T}} \\leq {PT_MAX:g}$ GeV"
-        fig.suptitle(f"{ds} --- iterative-3$\\sigma$-clipped RMS vs {xlabel}; "
+        est_title = "un-clipped (tail-inclusive) RMS" if PRECLIP else "iterative-3$\\sigma$-clipped RMS"
+        if PRECLIP:
+            stem = f"{stem}_preclip"
+        fig.suptitle(f"{ds} --- {est_title} vs {xlabel}; "
                      f"total $N={n_v:,}$ tracks (fitted by both){cut_note}; "
                      f"bands = analytic RMS error", y=0.995, fontsize=11)
         fig.savefig(out_dir / f"{ds}_{TAG}__{stem}.pdf", bbox_inches="tight")

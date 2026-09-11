@@ -2052,6 +2052,62 @@ schema, truth_tracks included). Pipeline executed:
   the uncut row was the >70 GeV region), pre-clip unchanged
   0.98/0.96/0.98/0.98/0.96.
 
+### 4.36 Reviewer appendix plots + covariance-source audit (2026-09-11); 16-bit/covariance experiments NOT launched (awaiting user)
+
+User batch: (a) build appendix supplements — pre-clip RMS pages for the test
+sets, quantile-calibration pages, "Hessian sensitivity" plots — in the paper
+palette; (b) audit the raw dataset sources for saved covariances (possible
+covariance-prediction retraining); (c) opinion on a bf16/fp16 all-through
+(seed kept fp64) pretraining experiment. **No trainings launched** (user asked
+to hold pending the covariance finding).
+
+- **Pre-clip pages**: `acts_rms_curves.py` gained `TRK_PRECLIP=1` (plain
+  tail-inclusive RMS, same design, `_preclip` stem, "un-clipped" in legends/
+  title). Generated for 2/10/50 GeV (vs-η) and uniform (vs-pT@70), |η|≤2, into
+  the eta2 bundle; staged to `material/iclr/*_rmscurve_{eta,pt}_preclip.pdf`.
+- **Quantile calibration**: new `scripts/quantile_calibration.py` — coverage of
+  each nominal τ from the stored ORDERED, DENORMALISED delta-space ladders
+  (`/quantiles/<p>`; anchors not stored but coverage needs none — linear/φ heads
+  cancel the anchor via pred, and the scale-free q/p anchor is recovered
+  uniquely from pred = q_med·(|a|+ε)+a, ε=0.02, verified <1e-5). Deviations tiny:
+  worst |empirical−nominal| ≤ 0.25 pp on uniform (d0 0.07, z0 0.21, φ 0.18,
+  θ 0.05, q/p 0.23) → **the ladders are well-calibrated**. Note: stored ladders
+  are monotone-reconstructed, so raw-crossing rates are training-time only.
+  Staged `material/iclr/*_quantile_calibration.pdf` (2/10/50/uniform).
+- **"Hessian sensitivity" — INTERPRETATION FLAGGED**: term is ambiguous. Built
+  `scripts/input_sensitivity.py` = input-sensitivity of each output to each of
+  the 15 hit features: first-order Jacobian |∂pred/∂x|·std(x) and second-order
+  input-Hessian diagonal (Hutchinson, eager v3 path, double-backward works) ·
+  std². STANDARDISED by feature std (a bare gradient just reflects units — the
+  first pass was 100 % dominated by φ_hit for that reason). Blues heatmaps,
+  row-normalised → `eval_plots/paper_plots_extras/sensitivity_R2LnoconvFT/`,
+  staged `material/iclr/input_sensitivity.pdf`. **NOT wired into the tex** (like
+  all these — user writes the paper); user to confirm whether they meant this,
+  the loss-Hessian eigenspectrum (weight-space sharpness, PyHessian-style), or
+  the KF-style parameter covariance = inverse loss-Hessian.
+- **COVARIANCE AUDIT of the raw sources** (portal + /eos parquet + ROOT via the
+  pyacts venv uproot). Findings:
+  - **Per-hit measurement covariance: YES** — `var_loc0, var_loc1, var_time` in
+    the `tracker_hits` parquet (27 cols) and `measurements.root`. Physical
+    (√var_loc0 ≈ 43 µm, √var_loc1 ≈ 15 µm; var_time 0 on strips as usual). These
+    are INPUTS we don't currently feed the network, not fit targets.
+  - **Per-track fitted-parameter covariance: ONLY the CKF (ambi) fit, DIAGONAL
+    only** — `err_eLOC0_fit … err_eQOP_fit` in `tracksummary_ambi.root` (63
+    branches; also pulls, which are unit-width: clipped-σ 0.94/0.95/1.01/0.94/
+    1.03 → the producer's CKF covariance IS well-calibrated, unlike our
+    in-pipeline refit of §4.29). **No off-diagonal 5×5 anywhere** (edm4hep.root
+    holds only MCParticles + raw readouts, no fitted tracks; no trackstates
+    covariance dumped).
+  - **Truth-KF (our paper reference): NO covariance at all** — `truth_tracks`
+    parquet is point values only (d0,z0,φ,θ,qop + ids); there is no
+    `tracksummary_truth.root`.
+  - ⇒ covariance-prediction training is possible but the only real targets are
+    the CKF DIAGONAL errors (5/track, matched by event/particle), not the truth-
+    KF and not off-diagonals. A full-covariance head would train its 10 off-
+    diagonals by Gaussian NLL self-consistency (no targets), and the model
+    ALREADY emits a calibrated per-track uncertainty via the quantile ladder
+    (above) — a covariance head mostly re-expresses that.
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`
