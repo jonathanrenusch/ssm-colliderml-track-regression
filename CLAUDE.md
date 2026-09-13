@@ -2108,6 +2108,54 @@ to hold pending the covariance finding).
     ALREADY emits a calibrated per-track uncertainty via the quantile ladder
     (above) — a covariance head mostly re-expresses that.
 
+### 4.37 DIGITIZATION BUG FIX — all data regenerated 2026-09-12; covariance now shipped; Phase-0 retrain-necessity check (2026-09-13)
+
+A collaborator found a **digitization bug** and **regenerated every
+drift_beamspot dataset on 2026-09-12** (portal `Last-Modified` = 2026-09-12 for
+all muon guns + ttbar, parquet AND ROOT; our v2 local copies are 2026-08-29 →
+**all v2 stores, checkpoints, and paper numbers are on the buggy data**). This
+SUPERSEDES the §4.36 covariance audit (which was on the pre-fix data):
+
+- **Covariance is now IN the data, full 5×5.** `truth_tracks` (truth-seeded KF =
+  our reference) AND `tracks` (CKF) went 11→32 cols: the 15 unique `cov_*`
+  entries + `chi2, ndf, n_measurements, n_outliers, n_holes, n_shared_hits`,
+  present in EVERY dataset incl. the training sets (uniform/loguniform/ttbar
+  footers show 15 cov cols). Physical (truth-KF 10 GeV √cov: d0 11.5 µm, z0
+  17.6 µm, φ 0.235 mrad, θ 0.084 mrad, q/p 4.1e-4; off-diagonals real,
+  corr(d0,φ)=−0.91). Per-hit `var_loc0/var_loc1` unchanged.
+- **Still KF-estimated, not ground truth** (no per-track ground truth exists),
+  and **imperfectly calibrated**: ACTS's own regenerated CKF pulls are wide in
+  the bending plane (d0 1.35, φ 1.64; z0/θ/q/p 1.09–1.12). (A quick truth-KF
+  pull attempt gave garbage — the §0.4 cross-event particle_id-collision trap;
+  proper event-scoped join still TODO.) ⇒ prefer self-supervised NLL covariance
+  (calibrated to own residuals) as the paper result; KF-cov regression is a
+  labelled side-branch (user agrees). Covariance decision: user leaning
+  regression-as-side-branch; NLL recommended as main; both <1% throughput.
+- **Phase 0 — retrain-necessity check (the decisive result).** Re-fetched the
+  4 fixed-pT test guns into `drift_beamspot_v3`, preprocessed (v2 recipe,
+  true_time) → `ICLR_retraining_v3`/`ICLR_eval_v3`, ran the UNCHANGED best
+  checkpoint (`eval_plots/sweep7/R2LnoconvFT/ckpts/model.ckpt`) via
+  `04b_eval_ckpt_deploy.sh` → `eval_plots/sweep7/R2LnoconvFT_deploy_v3/`.
+  |η|≤2 post-clip, v3-vs-v2:
+  - **The fix sharply improved intrinsic resolution** — truth-KF itself
+    −30…−49 % at 50–100 GeV (100 GeV d0 11.9→7.7 µm, z0 15.0→7.6, θ 63→33 µrad,
+    q/p −45 %; 10 GeV z0 −28 %, θ −11 %; 2 GeV −4…−11 %).
+  - **The SSM (trained on buggy hits) transfers well** — ratios to truth-KF stay
+    0.92–1.07 everywhere (it learned physics, not the bug), but **modest gaps
+    opened where the KF now exploits the sharper hits more**: q/p 1.01→1.07 @50,
+    0.93→1.04 @100; z0 0.99→1.04 / θ 0.99→1.02 @10 GeV. Some IMPROVED (φ/θ now
+    <1 at 50/100). 2 GeV still parity (0.98–1.00).
+  - **Verdict: retrain warranted but small → quick fine-tune, not from-scratch**
+    (user's suggestion, my call to execute).
+- **Recovery in progress (2026-09-13):** re-fetching v3 training muons LEAN (4
+  tables, NO `tracker_simhits` — saves ~140 GB/set; `--sort-key geometry` needs
+  no simhits and ≡ true_time on muons, matches inference). Quick fine-tune from
+  the FINAL R2Lnoconv-FT checkpoint on v3 **uniform** (flat 1–110 GeV directly
+  covers the gap region; loguniform over-weights the already-parity low-pT end):
+  MuonHybrid+WSD, DDP 2×20k, 20 ep, config
+  `ICLR_sweep7/R2LnoconvFT_v3recover_uniform_ft.yaml`. fp16 work parked. Full
+  v3 mix3 rebuild + ttbar is the follow-on for the complete fallback.
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`

@@ -1055,8 +1055,11 @@ class TrackRegressionWrapper(LightningModule):
             if stage in ("val", "test") and residual.numel() > 1:
                 unit, scale = self._PRECISION_UNITS.get(name, ("", 1.0))
                 self.log(f"{stage}/{name}/ssm_precision {unit}", residual.std() * scale, sync_dist=True)
-                quant_levels = torch.tensor([0.25, 0.75], device=residual.device, dtype=residual.dtype)
-                q25, q75 = torch.quantile(residual, quant_levels)
+                # torch.quantile rejects fp16 (precision 16-true runs); compute
+                # it on a float32 view — a metric, not part of the model output.
+                res_q = residual.float() if residual.dtype not in (torch.float32, torch.float64) else residual
+                quant_levels = torch.tensor([0.25, 0.75], device=res_q.device, dtype=res_q.dtype)
+                q25, q75 = torch.quantile(res_q, quant_levels)
                 self.log(f"{stage}/{name}/ssm_iqr {unit}", (q75 - q25) / 1.349 * scale, sync_dist=True)
                 self.log(f"{stage}/{name}/ssm_rms {unit}", torch.sqrt((residual ** 2).mean()) * scale, sync_dist=True)
                 # Keep the residuals for the unbinned iterative-3σ RMSE at epoch end.
