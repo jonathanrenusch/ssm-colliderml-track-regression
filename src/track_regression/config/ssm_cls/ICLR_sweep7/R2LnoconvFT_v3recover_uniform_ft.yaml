@@ -7,7 +7,7 @@
 # if it lands <= ~1.02 the conv-free model becomes the deployment baseline at 1.60 M tracks/s.
 trainer:
   devices: [1]             # documentary; the launcher pins CUDA_VISIBLE_DEVICES and passes --trainer.devices 1
-  max_epochs: 20
+  max_epochs: 50
   use_distributed_sampler: false
   precision: 32-true
   gradient_clip_val: 1.0
