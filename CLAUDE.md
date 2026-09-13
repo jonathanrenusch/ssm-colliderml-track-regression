@@ -2169,6 +2169,20 @@ SUPERSEDES the §4.36 covariance audit (which was on the pre-fix data):
   tails fat vs the fix-tightened KF) — the thing the mix3 fine-tune must close.
   Plots: `eval_plots/sweep7/R2LnoconvFT_deploy_v3/plots/` (−3..3) + /eos copy
   `/eos/user/j/jorenusc/v3_perf_plots/`.
+  **Ops gotchas hit during the recovery (2026-09-13):**
+  (1) **K8s pod RAM cap = `memory.max` 335 GB** (`/sys/fs/cgroup/memory.current`;
+  `free -g` shows the whole NODE ~1.5 TB and is misleading). Preprocess at 24
+  workers (~7.6 GB RSS each ≈ 180 GB) is near the cap → reduced to **12
+  workers** (~90 GB); fine-tune dataloader trimmed to `num_workers 6 /
+  prefetch 2`. The harness kills TRACKED background tasks (watchers) on high
+  `memory.current` (it counts reclaimable page cache), but nohup-detached
+  processes survive — so the pipeline runs as a nohup, not a bg task.
+  (2) **`pixi run python3 -c "…'…'…"` STRIPS the inner single quotes** →
+  SyntaxError; a track-count guard using it false-returned 0 and aborted the
+  first pipeline after a SUCCESSFUL uniform preprocess. Use system `python3`
+  for inline `-c` guards (script files with quotes are unaffected).
+  Uniform true_time store built fine (181.5 M); pipeline
+  `scratchpad/truetime_pipeline2.sh` restarted from loguniform.
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 

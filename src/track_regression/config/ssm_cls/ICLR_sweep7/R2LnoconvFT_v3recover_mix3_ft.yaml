@@ -78,8 +78,8 @@ model:
 data:
   preprocessed_dir: /scratch/colliderml/ICLR_retraining_v3_mix3      # uniform + loguniform + ttbar (>= 395 M tracks)
   batch_size: 40000   # per GPU; DDP x2 -> 80k effective (2026-09-13: raised from 20k for VRAM/speed; LRs scaled x2)
-  num_workers: 8
-  prefetch_factor: 4
+  num_workers: 6
+  prefetch_factor: 2         # 2026-09-13: trimmed (8/4 -> 6/2) for the ~300 GB pod RAM cap
   pin_memory: true
   packed_batches: true
   seed_residual_features: true      # P': flat_data._pack appends the 3 seed-residual hit features
