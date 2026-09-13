@@ -20,13 +20,16 @@ trainer:
 model:
   optimizer: MuonHybrid
   lrs_config:                 # Muon-hybrid polish (Z-FT peaks), 5 % warm-up, 50 % cooldown over 50 epochs
+    # 2026-09-13: per-GPU batch 20k->40k (80k effective) for VRAM utilisation /
+    # faster epochs; LRs scaled x2 (linear scaling rule) to preserve the
+    # optimisation dynamics of the proven 40k-effective recipe.
     schedule: wsd
-    initial: 2.0e-06
-    max: 2.0e-05
-    end: 1.0e-06
+    initial: 4.0e-06
+    max: 4.0e-05
+    end: 2.0e-06
     weight_decay: 0.02
     betas: [0.9, 0.95]
-    muon_max: 6.0e-05
+    muon_max: 1.2e-04
     muon_weight_decay: 0.0
     muon_momentum: 0.95
     muon_ns_steps: 5
@@ -74,7 +77,7 @@ model:
 
 data:
   preprocessed_dir: /scratch/colliderml/ICLR_retraining_v3_mix3      # uniform + loguniform + ttbar (>= 395 M tracks)
-  batch_size: 20000   # per GPU; DDP x2 -> 40k effective
+  batch_size: 40000   # per GPU; DDP x2 -> 80k effective (2026-09-13: raised from 20k for VRAM/speed; LRs scaled x2)
   num_workers: 8
   prefetch_factor: 4
   pin_memory: true
