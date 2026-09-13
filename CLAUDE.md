@@ -2147,14 +2147,28 @@ SUPERSEDES the §4.36 covariance audit (which was on the pre-fix data):
     <1 at 50/100). 2 GeV still parity (0.98–1.00).
   - **Verdict: retrain warranted but small → quick fine-tune, not from-scratch**
     (user's suggestion, my call to execute).
-- **Recovery in progress (2026-09-13):** re-fetching v3 training muons LEAN (4
-  tables, NO `tracker_simhits` — saves ~140 GB/set; `--sort-key geometry` needs
-  no simhits and ≡ true_time on muons, matches inference). Quick fine-tune from
-  the FINAL R2Lnoconv-FT checkpoint on v3 **uniform** (flat 1–110 GeV directly
-  covers the gap region; loguniform over-weights the already-parity low-pT end):
-  MuonHybrid+WSD, DDP 2×20k, 20 ep, config
-  `ICLR_sweep7/R2LnoconvFT_v3recover_uniform_ft.yaml`. fp16 work parked. Full
-  v3 mix3 rebuild + ttbar is the follow-on for the complete fallback.
+- **Recovery — FINAL decision (user, 2026-09-13): full three-way mix3, TRUE-TIME
+  sort on ALL datasets, exact proven recipe.** (Earlier attempts superseded: a
+  geometry-sort uniform-only 20-ep run was launched then KILLED at the user's
+  instruction — "not gambling"; a geometry-sort mix3 pipeline was also aborted
+  when the user required true_time everywhere.) Freed disk by deleting the old
+  ~400 M v2 training set (`/scratch/ICLR_retraining_v2*`, 309 G — /eos backup
+  kept) + the geometry v3 uniform store → 1.3 T free. Then `truetime_pipeline.sh`
+  (nohup, survives the harness memory-killer that kills tracked bg tasks):
+  per dataset fetch WITH `tracker_simhits` → preprocess `--sort-key true_time`
+  → free raw; uniform + loguniform + ttbar(46–784, pt 1–110) → chain-build
+  `ICLR_retraining_v3_mix3` → launch the EXACT stage-2 recipe (MuonHybrid+WSD,
+  DDP 2×20k, 50 ep) from the final R2Lnoconv-FT ckpt, config
+  `ICLR_sweep7/R2LnoconvFT_v3recover_mix3_ft.yaml`. Guard: fine-tune launches
+  only if mix3 train > 300 M. The 4 fixed-pT eval guns were already true_time
+  (Phase-0). NOTE for the record: true_time ≡ geometry on muons (100 %/99.995 %,
+  §5.2), so the muon re-fetch of simhits is bit-identical work — done anyway per
+  the user's explicit "true time on all". fp16 work parked.
+  **Phase-0 table (current stale ckpt on v3, |η|≤3 / |η|≤2) showed the tail
+  story**: post-clip core at parity (0.90–1.07) but pre-clip φ/θ 6–17× (forward
+  tails fat vs the fix-tightened KF) — the thing the mix3 fine-tune must close.
+  Plots: `eval_plots/sweep7/R2LnoconvFT_deploy_v3/plots/` (−3..3) + /eos copy
+  `/eos/user/j/jorenusc/v3_perf_plots/`.
 
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
