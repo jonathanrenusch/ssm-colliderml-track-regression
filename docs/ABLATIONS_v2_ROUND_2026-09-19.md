@@ -204,3 +204,31 @@ Caveats that matter more than the number: this is 1.7 % of training; the two are
 different architectures whose optimal LR may differ; and this campaign has
 repeatedly seen early orderings reverse, because the precision arrives in the
 OneCycle anneal (4.1 reading 0, 4.11). Nothing here is a result yet.
+
+## Throughput comparisons between these arms are NOT yet apples-to-apples
+
+Only `MinGRUCLSEncoder` has a fused packed Triton kernel. `DiagRNNCLSEncoder`,
+`MinLSTMCLSEncoder` and `ComplexLRUCLSEncoder` all set
+`_use_packed_kernel = False` and run the eager padded path, which the width
+sweep measured at **~17x slower** than the kernel (354 ms vs 20 ms at 131 k
+tracks, h = 192). Mamba-2 has its own v5pc kernel; the transformer has
+flash-attention.
+
+So a raw tracks/s table across the arms would mostly rank *how much kernel work
+each one has had*, not the architectures. Two defensible options, and the second
+is what the physics ablation actually needs:
+
+1. compare every arm on the **eager padded path** (apples to apples, but ~17x
+   below what any of them can do), and quote the fused number separately for the
+   arms that have a kernel;
+2. quote physics parity from the ablation and throughput **only for encoders
+   with a tuned kernel**, stating plainly that the others were not kernel-tuned.
+
+Writing packed kernels for the non-selective and complex variants is not hard --
+they are strictly simpler than minGRU's (no gate to read; the complex one needs
+two accumulators instead of one) -- but it is not needed to answer the physics
+question, which is what these 25-epoch runs are for.
+
+Practical consequence noticed during a smoke test: a physics eval of an
+eager-path arm takes considerably longer than a kernel-path one. That is
+slowness, not a defect.

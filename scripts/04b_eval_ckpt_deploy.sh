@@ -22,13 +22,20 @@ export TRK_MATMUL_PRECISION="${TRK_MATMUL_PRECISION:-high}" CUDA_VISIBLE_DEVICES
 export TRK_SSD_BUCKET16="${TRK_SSD_BUCKET16:-1}" TRK_COMPILE_FRONTEND="${TRK_COMPILE_FRONTEND:-1}"
 export TRK_SEED_DTYPE="${TRK_SEED_DTYPE:-float64}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/triton_cache_deploy_$GPU}"
-echo "deployment eval: matmul=$TRK_MATMUL_PRECISION bucket16=$TRK_SSD_BUCKET16 compile_frontend=$TRK_COMPILE_FRONTEND seed_dtype=$TRK_SEED_DTYPE"
+# Optional: run the ENCODER in reduced precision (fp16/bf16) while the input
+# normalisation, Fourier encoding, heads, loss and seed stay fp32/fp64.  Used to
+# measure what reduced-precision *inference* costs physically; unset = no change.
+ENC_DTYPE_ARG=()
+if [ -n "${TRK_EVAL_ENCODER_DTYPE:-}" ]; then
+  ENC_DTYPE_ARG=(--model.model.init_args.encoder_autocast_dtype "$TRK_EVAL_ENCODER_DTYPE")
+fi
+echo "deployment eval: matmul=$TRK_MATMUL_PRECISION bucket16=$TRK_SSD_BUCKET16 compile_frontend=$TRK_COMPILE_FRONTEND seed_dtype=$TRK_SEED_DTYPE encoder_dtype=${TRK_EVAL_ENCODER_DTYPE:-<config>}"
 for ds in ${EVAL_DATASETS:-single_muon_2GeV single_muon_10GeV single_muon_100GeV ttbar ttbar_new_pt1 single_muon_uniform}; do
   [ -d "$EVAL_ROOT/$ds/test" ] || { echo "=== $ds: not in $EVAL_ROOT, skipped"; continue; }
   echo "=== $ds  $(date)"
   pixi run -e default python train.py test --config "$OUT/config.yaml" --ckpt_path "$OUT/ckpts/model.ckpt" \
      --trainer.devices 1 --trainer.logger false --data.preprocessed_dir "$EVAL_ROOT/$ds" \
-     --data.seed_residual_features false \
+     --data.seed_residual_features false "${ENC_DTYPE_ARG[@]}" \
      --data.batch_size 10000 --data.num_workers 0 2>&1 | grep -v "it/s\|Warning" | tail -8
   mv "$OUT/model__test_predictions.h5" "$OUT/preds/$ds.h5"
 done
