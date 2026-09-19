@@ -131,30 +131,55 @@ Consequences, and a correction to what I expected:
 * the levers that remain are **fewer tokens**, **cheaper arithmetic** (fp16) and
   **kernel work**, not fewer projection FLOPs.
 
-### Width alignment is worth more than any of it
+### Width alignment: a real effect, but narrower than it first looked
 
-Raw times at 131 k tracks, interleaved:
+Raw times at 131 k tracks, interleaved, packed Triton kernel:
 
-| hidden | 4H | ms |
+| hidden | channel blocks at BD=64 | ms |
 |---|---|---|
-| 188 | 752 | 17.73 |
-| 190 | 760 | 18.73 |
-| **192** | **768 = 12 x 64** | **17.05** |
-| 193 | 772 | **32.16** |
-| 194 | 776 | 21.70 |
-| 196 | 784 | 20.62 |
+| 188 | 3 | 17.73 |
+| **192** | **3** | **17.05** |
+| 193 | 4 | 37.84 (suspect, see below) |
+| 194 | 4 | 21.70-25.25 |
+| 196 | 4 | 20.62 |
 
-**h = 192 is 27 % faster than h = 194 for 2 % fewer parameters, and h = 193 is
-88 % slower than either.** The projection width lands on or off a tensor-core
-tile boundary, and nothing else about the model changes.
+**h = 192 is ~25 % faster than h = 194 for 1 % fewer parameters.** The
+mechanism is not mysterious and does not need to be inferred from timings --
+it is the launch grid, `mingru_short_triton.py:122`:
 
-This is a methodological problem for the whole comparison: parameter-matching
-the arms forced odd widths (minGRU 194, diagRNN 270/274, minLSTM 157, cLRU 270),
-which penalises their throughput for reasons that have nothing to do with the
-architecture. **Physics numbers are unaffected** (they are what the matched
-widths were for), but every deployment throughput number must be re-measured at
-each architecture's nearest 64-aligned width before it is quoted.
+    grid = lambda meta: (B, triton.cdiv(H, meta["BD"]), 2)
 
-Caveat: these were measured with the other GPU training, so the absolute times
-are contended. The 32 k / 131 k agreement and the interleaving make the
-*ratios* trustworthy; they still want an uncontended re-run before publication.
+At `BD = 64`, `H = 192` is exactly 3 channel blocks and `H = 194` is 4: **+33 %
+programs for +1 % channels**, with the last block 97 % idle.
+
+Control (`TRK_MINGRU_KERNEL=off`, same widths, same batch): on the eager padded
+path the spread collapses to **5.7 %** (192 / 193 / 194 = 354 / 394 / 374 ms)
+against 21-25 % with the kernel. So the effect really is the kernel's channel
+blocking, not the GEMM shapes -- an independent check of the grid argument.
+
+Three corrections to the first reading of this:
+
+1. **It is a property of my minGRU kernel, not of the hardware or of the
+   model.** The dense GEMMs are nearly insensitive: an isolated cuBLAS
+   `(1.7 M x 128) @ (128 x N)` costs only 7 % more at `N = 648` (8 past a
+   boundary) than at `N = 640`, and padding it to 704 wins 1 %.
+2. **The paper's deployment model is therefore fine.** Its four Mamba-2
+   `in_proj` matrices are `648 x 128` -- 8 past a 64-boundary, exactly the
+   suspicious shape -- which is why this was worth checking; at 7 % on one GEMM
+   inside a well-tuned v5pc path, there is no free headline throughput here.
+3. **The 88 % outlier at h = 193 should not be quoted.** It has the same block
+   count as 194, so the extra cost is almost certainly a bad autotune pick made
+   while the GPU was contended, not a real cliff.
+
+So the earlier claim that "every deployment throughput number must be
+re-measured at 64-aligned widths" was too broad. Only the minGRU arm uses this
+kernel (`DiagRNNCLSEncoder`, `MinLSTMCLSEncoder` and `ComplexLRUCLSEncoder` all
+set `_use_packed_kernel = False`; Mamba-2 and the transformer have their own
+paths). The actionable version: **deploy minGRU at h = 192, not 194** -- 1 % of
+the parameters for ~25 % of the throughput -- and re-measure that arm's
+tracks/s at the aligned width before quoting it.
+
+Caveat: measured with the other GPU training. The 32 k / 131 k agreement and the
+interleaving make the ratios trustworthy, and the grid arithmetic explains them
+independently, but an uncontended re-run (with a cleared autotune cache) is owed
+before publication.
