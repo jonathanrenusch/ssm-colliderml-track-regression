@@ -2184,6 +2184,60 @@ SUPERSEDES the §4.36 covariance audit (which was on the pre-fix data):
   Uniform true_time store built fine (181.5 M); pipeline
   `scratchpad/truetime_pipeline2.sh` restarted from loguniform.
 
+### 4.38 CPU baseline corrected 30 k -> 173 k, and it is now a thread scan (2026-09-17)
+
+The collaborator's ACTS KF CPU throughput was wrong: the baseline is **172.7 k
+tracks/s**, not 30 k, and it comes with a full thread scan on the Threadripper
+3990X (tracks/s): 1t 7,500 / 2t 14,400 / 4t 27,600 / 8t 53,500 / 16t 93,700 /
+32t 141,300 / 64t 172,700 -- parallel efficiency at 64 threads **36 %** of
+linear. All of §4.32's CPU-derived numbers are stale: tracks/s/$ is
+126 (Ada) / **43** (CPU, was 7.5) / 64 (H100), so the Ada is **3.0x** the CPU
+per device dollar (was 16.7x) and the H100 1.5x (was 8.5x); raw ratios are
+2.9x (Ada) and 11.1x (H100).
+
+`scripts/plot_throughput_cross_device.py` now carries the scan as
+`CPU_THREADS` / `CPU_TRACKS_PER_S` instead of the old `CPU_REF` constant and
+draws it as a red curve against a **second x axis on top (CPU threads)**,
+with the ideal-linear-scaling reference dotted; the GPU curves keep the bottom
+axis (tracks per batch) and the axes are colour-coded to their curves. The
+legend sits below the panel -- with the CPU curve crossing the frame
+diagonally there is no in-frame box that clears all four series. Figure +
+summary regenerated in `eval_plots/paper_plots/throughput_cross_device/`,
+synced to the paper, `main.pdf` rebuilt (22 pages, main body still 9).
+
+**fig:throughput caption rewritten (user asked)**: blue = GPUs vs batch size
+(bottom axis), red = ACTS KF vs thread count (top axis) reaching
+`\cpuBaseline` at 64 threads, dotted = ideal linear scaling; the old "the
+dashed line is the ACTS KF fit" sentence is gone. "32-core" was DROPPED from
+the caption rather than restated -- the scan runs to 64 threads and the 3990X
+is a 64-core part, so the core count in tab:throughput ("32-core CPU") and in
+results.tex:170 is probably wrong, but that is a hardware fact only the user
+can confirm. Legend prints the measured 173 k where the caption prints the
+macro `\cpuBaseline` = $\sim$170 k (consistent, not identical digits).
+
+**Still stale, paper text NOT touched (user writes it):**
+`sections/results.tex:170` claims "more than one order of magnitude ... even
+if normalized to the approximate cost of the compute device" -- per dollar it
+is 3.0x / 1.5x. The macros `\cpuBaseline` and the tab:throughput ratio 42.5
+were already corrected by the user and are right.
+
+**Axis sides (user 2026-09-17)**: the GPU batch-size axis is on TOP (next to
+the blue GPU curves), the CPU thread axis on the BOTTOM (next to the red CPU
+curve) -- proximity replaces colour coding, so neither axis/label/tick is red
+any more; only the CPU line and the ideal-scaling line are. Gotcha: `twiny()`
+forces the parent's x ticks to the bottom and the twin's to the top, so the
+`set_label_position` / `tick_params` calls that move them MUST run after the
+`twiny()` call, and `xaxis.set_ticks_position()` alone moves the label but not
+the tick labels -- use `tick_params(labeltop=/labelbottom=)`.
+
+**Legend placement is verified, not eyeballed**: the legend sits below the
+panel; `fig.tight_layout()` runs BEFORE `ax_c.legend(...)` (it is anchored in
+axes coordinates, so laying out afterwards drags it back onto the x label).
+Checked by resampling every drawn polyline into display coordinates and
+asserting no point falls inside the legend bbox, plus a positive gap to the
+x-label bbox (scratch `check_legend.py`, ~11 px at 100 dpi).
+
+
 ### 5.1 Comet RMS-vs-IQR audit (`docs/AUDIT_comet_rms_iqr.md`)
 
 Verdict: **no logging bug.** `ssm_rms_dm`, `ssm_iqr_dm`, `ssm_precision_dm`
@@ -2407,3 +2461,139 @@ mislabelled tracks excluded):
   test_block_sampler_yields_len_every_epoch`). A and C keep running on the old
   code (a restart would cost 12 h / 3 days for a few val points); evaluate
   their `last.ckpt` offline with `04_eval_ckpt_iclr.sh`.
+
+### 4.39 minGRU + fused packed kernel — 3.96 M tracks/s, 2.2x the SSM deployment path (2026-09-17)
+
+User priority after the architecture ablation (§4.40): "make the GRU
+embarrassingly parallel". Done — the vehicle is **minGRU** (Feng et al. 2024),
+the GRU with the recurrent-state dependence removed from the gates:
+`h_t = a_t h_{t-1} + b_t`, `a_t = 1 - sigmoid(W_z x_t)`, `b_t = sigmoid(W_z x_t) * W_n x_t`.
+Linear + elementwise ⇒ no `tl.dot`, no LxL decay matrix, no Gram matrix in the
+kernel, and `a,b` for the whole stream come from one GEMM.
+Full write-up + gates: `docs/MINGRU_KERNEL_2026-09-17.md`.
+
+- **Code (all additive):** `src/track_regression/mingru.py` (encoder,
+  structurally identical to the ablation's `BiGRUCLSEncoder`: 2 layers,
+  bidirectional, terminal-state readout, 256-d pool; trunk **629,428** =
+  +0.18 % vs the paper model), `src/track_regression/ops/mingru_short_triton.py`
+  (padded `mingru_bidi_fused` + **packed `mingru_bidi_packed`, the deployed
+  path**), `tests/test_mingru.py` (13 tests).
+- **Throughput, 1xH100 NVL, uncontended, `bench_infer_flat.py --gpu-seed`,
+  ttbar_new_pt1, 131 k batch:** minGRU deployed **3.96 M tracks/s** (11.1 GiB)
+  vs SSM deployed 1.76 M on the same script/store (paper quotes 1.91 M), GRU
+  cuDNN TF32 1.61 M, SSM fused strict fp32 0.93 M. Strict fp32: minGRU 1.45 M.
+  Decomposition: packed-vs-padded **1.48x** (predicted 1.50x from the FLOP
+  count — 13.3 mean hits padded to 20, i.e. a third of the projection FLOPs
+  wasted), TF32 **1.96x** (vs only 1.13x for the launch-bound cuDNN GRU —
+  minGRU is FLOP-bound), compiled front-end **1.39x**.
+  **The scan is 0.25 % of the FLOPs**; all the cost is the projections.
+- **Kernel conventions reused from the Mamba campaign** (`opt_kernel`):
+  in-kernel REVERSE via per-segment bounds (no flip gathers, store un-flips),
+  direction addressed by **channel offset** into a shared in-projection (night
+  1: Inductor copies every sliced opaque-op input), `@torch.library.custom_op`,
+  strict IEEE fp32 inside the kernel, autotuned `BD` 64–256, output allocated
+  with `empty` (every row written exactly once).
+- **Training path**: Hillis-Steele prefix scan, 5 rounds at L=20 instead of 20
+  sequential steps. Costs 20.4 steps/s vs the classical GRU's 30.0 at bs 2048
+  — training wall-clock only.
+- **Physics**: LR mini-sweep (46 k steps) selects **7.07e-5**, interior
+  minimum, GM5 1.191 vs the classical GRU's 1.183 at the same budget (0.7 %).
+  Matched-budget runs (921,600 steps, 2 seeds with the recipe + 2 without,
+  extending the 3x2 factorial to 4x2) launched 2026-09-17 20:14 on all four
+  GPUs; auto-evaluated on the v3 farm when they finish.
+- **CUDA graphs (contended, both sides equally, as in §4.27):** bs 2048
+  378.6 k -> **909.6 k (+140 %)**, bs 4096 759.1 k -> **1.468 M (+93 %)**,
+  `graph-vs-eager max |dpred| = 0.000e+00`. Structural advantage over the SSM:
+  its graph path is incompatible with `TRK_SSD_BUCKET16` (device-sync split),
+  so it must choose; the packed minGRU kernel has no bucketing and no device
+  sync, so graphs and the packed path **compose** — the small-batch/HLT regime
+  gets both.
+- **Not done**: direct Ada measurement (projection ~1.04 M from the measured
+  3.79x H100:Ada ratio — projection, not a claim), uncontended graph numbers,
+  bf16/fp16.
+
+### 4.40 v2 architecture ablations, 2-GPU node (2026-09-19) — complex-decay LRU, the fp16 experiment, and what throughput actually responds to
+
+Full write-up `docs/ABLATIONS_v2_ROUND_2026-09-19.md`; paper-wording triage
+`docs/PAPER_ENCODER_NEUTRALITY_2026-09-19.md`; table `scripts/abl_v2_table.py`.
+All arms: the **established stage-1 recipe unchanged** (Lion, OneCycle 1e-5 ->
+5e-5 -> 1e-6, bs 2048, 25 epochs, strict fp32) on `ICLR_retraining_v2_mix3`
+(the pre-digitization-fix v2 the paper used, per the user's 2026-09-13 decision
+that R&D falls back to v2), evaluated with `04b_eval_ckpt_deploy.sh` on
+`ICLR_eval_v2_new`, `TRK_ABS_ETA_MAX=2`, truth-KF reference.
+
+**Reference arm** `SSM_baseline_25ep` = the R2Lnoconv **stage-1** checkpoint
+(`logs/comet_offline/8f7e4ac9...`), i.e. this recipe with the paper's Mamba-2
+encoder. Post-clip GM5 0.994 / 0.994 / 0.997 / 0.960 / 0.991 / 0.996 (mu 2 / 10
+/ 50 / 100 GeV / uniform / ttbar_new_pt1), pre-clip 0.984 / 0.972 / 0.988 /
+0.953 / 0.972 / 0.902. Every v2 arm reads against this row, never against v3.
+
+**New encoders** (`src/track_regression/mingru.py`, `tests/test_mingru.py` 21
+tests): `ComplexLRUCLSEncoder` — an LRU-style **complex** decay `r e^{i w}`,
+`r = exp(-exp(nu))` stable by construction. Motivation is the geometry: a track
+is a helix, its azimuth advances along the hit sequence, and a real decay can
+only forget where a complex eigenvalue can rotate. Because the decay is a
+learned constant, the composed multiplier after Hillis-Steele round `k` is
+`a^(2^k)` in closed form, so `_complex_scan_const` carries only `b` — one
+complex FMA per round, no `a` tensor, no pad masking (1.6x on the layer,
+26.4 -> 33.5 it/s).
+
+**fp16 (`scripts/precision_feature_audit.py`, 200 k real hits).** fp16 and TF32
+carry the **same 10 mantissa bits**, so the campaign's TF32 validation (<=0.3 %,
+4.12/4.32) already bounds fp16's forward error; only the 5-bit exponent is new,
+and nothing here is near 65504. bf16 has 7 bits, 8x coarser, buying range we do
+not need (arXiv:2510.26788 is the citable evidence that bf16 rounding breaks
+value-level agreement where fp16 does not). 10 bits **cannot** hold a 2 m
+detector to 43 um (needs 15.5) and **min-max normalisation does not help** —
+near 1.0 fp16 steps by 2^-11 = 0.5 mm of x, 1.5 mm of z; but the micron-scale
+information lives in the fine Fourier components (0.69 um of x at 2^-10) and the
+O(1) seed residuals, both pointwise and so left in fp32 by autocast. Seed stays
+fp64 (4.32). **Measured: fp16 gives NO training speedup** (55.3 vs 55.6 it/s) —
+training is bound by the eager padded path, the fp32 scan and the loader, not the
+GEMMs; it is an *inference* lever only. **fp16 without a GradScaler diverges**:
+a loss spike at ~24 k steps (0.074 -> 0.403) overflowed a gradient and NaN'd the
+weights in one update (`V2_mingru_fp16_noscaler_DIVERGED.log`) — loss scaling is
+part of the recipe, not a confound; rerun under `precision: 16-mixed`.
+
+**Throughput does NOT track projection FLOPs at this size**
+(`scripts/mingru_flop_scaling.py`, packed kernel, identical at 32 k and 131 k
+tracks/batch): below h ~ 192 a FLOP cut returns only 60-75 % of itself (2.00x
+FLOPs -> 1.52x speed); above it the penalty is sub-linear. So the width-matched
+non-selective arm's 1.99x FLOP cut should be expected to give ~1.3-1.5x, and
+structured/Monarch projections would underdeliver — **not worth a GPU-day at this
+model size**. The levers that remain are fewer TOKENS, cheaper arithmetic and
+kernel work.
+
+**Width alignment (minGRU kernel only).** h = 192 is ~25 % faster than h = 194
+for 1 % fewer parameters. Mechanism read off the launch grid
+(`mingru_short_triton.py:122`, `grid = (B, cdiv(H, BD), 2)`): at BD = 64, H = 192
+is 3 channel blocks and H = 194 is 4 — **+33 % programs for +1 % channels**.
+Confirmed to be the kernel and not the GEMMs: an isolated cuBLAS in_proj costs
+only 7 % more at N = 648 than at N = 640 and padding to 704 wins 1 %, and with
+`TRK_MINGRU_KERNEL=off` the spread collapses to 5.7 % against the kernel's
+21-25 %. **The paper's deployment model is therefore fine** (its four Mamba-2
+`in_proj` are 648x128, 8 past a boundary — checked because it would have been a
+free headline win, and it is not one). The h = 193 outlier (88 %) has the same
+block count as 194 and is a contended-autotune artefact — do not quote it.
+Actionable: **deploy minGRU at h = 192**. Only the minGRU arm uses this kernel
+(DiagRNN / MinLSTM / ComplexLRU set `_use_packed_kernel = False`).
+
+**The two non-selective arms are a pair.** Removing the input-dependent gate
+halves the in-projection; spending that on width (h 270, param-matched, other
+node) asks "does selectivity matter at equal capacity?", pocketing it (h 194,
+this node) asks "can we delete the gate and keep the saving?". The second
+deliberately confounds gate-removal with capacity and is only interpretable next
+to the first. **No published ablation of selectivity exists below L ~ 32**
+(Block-Biased Mamba arXiv:2505.09022 and arXiv:2609.16540 both argue
+input-dependent decay is a long-context mechanism), so this is new ground — and
+if the param-matched arm reaches parity, the paper's "Mamba-2's *selective*
+update ~ Kalman gain" motivation (intro 40-42, method 81-104) is overstated and
+should become the cleaner "any bidirectional *linear recurrence* can represent
+the filter-plus-smoother".
+
+**Ops.** `pkill -f <pattern>` matches the agent's own shell and kills it
+(exit 144) whenever the pattern appears anywhere in the command line — use a
+bracket class AND keep the literal name out of the rest of the command, or kill
+by PID. Physics evals tolerate GPU contention and now run alongside training
+(the runs use ~2 GB of 96); **throughput does not**, and
+`scripts/abl_v2_throughput.sh` refuses a busy GPU by design.
