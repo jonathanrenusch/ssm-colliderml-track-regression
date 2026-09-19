@@ -183,3 +183,24 @@ Caveat: measured with the other GPU training. The 32 k / 131 k agreement and the
 interleaving make the ratios trustworthy, and the grid arithmetic explains them
 independently, but an uncontended re-run (with a cleared autotune cache) is owed
 before publication.
+
+## Early signal, ~80 k of 4.73 M steps (do not over-read)
+
+Both runs happen to be step-matched at four validation points (every 20 k
+steps), on the pooled **mixed** val set (muons + ttbar, so not comparable to the
+muon-only test tables):
+
+| | d0 [um] | z0 [um] | phi [mrad] | theta [mrad] | q/p [1/GeV] |
+|---|---|---|---|---|---|
+| complex-LRU | 25.9 | 43.7 | 0.574 | 0.229 | **1.71e-3** |
+| minGRU fp16 | 26.0 | 44.1 | 0.572 | 0.232 | **3.25e-3** |
+
+Geometry is indistinguishable; **complex-LRU is ~1.9x better on q/p** at equal
+steps. That is the parameter the oscillatory prior was aimed at -- curvature
+*is* phase advance per unit path length, which a complex eigenvalue can express
+and a real decay cannot.
+
+Caveats that matter more than the number: this is 1.7 % of training; the two are
+different architectures whose optimal LR may differ; and this campaign has
+repeatedly seen early orderings reverse, because the precision arrives in the
+OneCycle anneal (4.1 reading 0, 4.11). Nothing here is a result yet.

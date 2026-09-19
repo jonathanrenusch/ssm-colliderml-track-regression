@@ -116,3 +116,13 @@ tracker_simhits.true_time` (now the shim default; `DIGI_TIME=1` restores the old
 - The 100 %-vs-74.6 % efficiency contrast in older text should be restated as
   100 % vs 99.3 % (with the time fix) — the SSM efficiency point survives only as
   "fits every prototrack including the 0.7 % the refit still loses".
+
+## Status: EXECUTED 2026-09-03 evening (see CLAUDE.md §4.30)
+
+All paper figures and numbers now reference the shipped truth-tracking KF. Plot bundle
+`eval_plots/paper_plots/truthkf_R2LFT/` (built by `scripts/run_truthkf_paper_plots.sh` on the
+R2L-FT predictions; matched counts identical to `sweep7/R2LFT/plots/rms_summary.json`), synced
+into the paper by `material/iclr/sync_figures.sh`; the \ttbar pages moved to `ttbar_new_pt1`
+(runs 6–45, 646,382 matched tracks) to match the results table. The ad-hoc refit survives only
+as an appendix framework/efficiency cross-check with the calibration caveat spelled out, and the
+efficiency contrast is restated as 100.0 % vs 99.3 % (199,760 uniform-muon prototracks).
