@@ -41,11 +41,19 @@ def rms3(x, iters=10, tol=1e-4):
 
 
 def _fmt(val: float, err: float | None) -> str:
-    """0.992(3): value to three decimals, 1-sigma error on the last digit."""
-    if err is None:
+    """0.992(2): the uncertainty is always ONE digit, and the value is quoted
+    to that same decimal place -- the usual metrology rule.  So an error of
+    0.0016 gives 0.992(2) and one of 0.016 gives 0.96(2); the bracket never
+    runs to two digits, the value's precision moves instead.
+    """
+    if err is None or not math.isfinite(err) or err <= 0:
         return f"{val:.2f}"
-    d = max(1, min(99, int(math.ceil(err * 1000 - 1e-9))))
-    return f"{val:.3f}({d})" if d < 10 else f"{val:.3f}({d})"
+    exp = math.floor(math.log10(err))
+    lead = round(err / 10 ** exp)
+    if lead == 10:                       # 9.6e-3 -> 1e-2, one place coarser
+        lead, exp = 1, exp + 1
+    dec = max(0, -exp)
+    return f"{val:.{dec}f}({lead})"
 
 
 def _ratios(res_s, res_k, idx=None):
