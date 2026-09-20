@@ -309,3 +309,49 @@ fp16 edges ahead **and halves the memory**. The speed gain is small because
 both the H100 and the Ada run this model at only ~8 % of their TF32
 tensor-core peak — neither is arithmetic-bound — so the prize is the VRAM,
 which is what decides the batch that fits on a 32 GB card.
+
+## Is FlashAttention the right tool at L ~ 20?  NO — it is 40-55 % slower (2026-09-20)
+
+Referee-facing study, `scripts/attn_strategy_study.py`: the **attention step
+alone**, at the trained transformer's exact shapes (4 heads, head dim 32,
+Lmax = 22 = 20 hits + 2 CLS), microseconds per 1e6 tokens, H100:
+
+| strategy | fp16 B=8k / 32k / 131k | fp32 B=8k / 32k / 131k |
+|---|---|---|
+| **dense padded, torch SDPA** | **3.7 / 3.6 / 3.8** | 8.9 / 8.9 / 9.2 |
+| dense padded, explicit QK^T/softmax/AV | 4.5 / 4.4 / 4.4 | **5.8 / 6.1 / 6.5** |
+| torch SDPA forced onto its flash backend | 5.6 / 5.6 / **fails** | **no kernel at all** |
+| `flash_attn_varlen_func` (packed) | 5.2 / 5.2 / **fails** | n/a (fp16/bf16 only) |
+
+* FlashAttention is **40-55 % slower** than plain dense attention here. It
+  exists to avoid materialising the L x L score matrix for LONG sequences; at
+  L = 22 that matrix is 22 x 22 per head = 484 numbers, register-resident, so
+  the tiling, online softmax and varlen index plumbing are pure overhead.
+* Both flash paths **fail to launch at B = 131 k** (`CUDA error: invalid
+  configuration argument` — a grid-dimension limit), i.e. they are not merely
+  slower but unusable at our deployment batch sizes.
+* In strict fp32 there is **no flash kernel at all**, and the naive explicit
+  implementation beats SDPA by 30-40 %.
+* Note the dense rows pay padding (22 vs a 15.2 mean) and still win — which
+  makes the conclusion stronger, not weaker.
+
+**So our transformer already uses the best attention strategy**, and the
+earlier plan to "fix" it with flash-varlen would have made it slower. The
+inefficiency is somewhere else entirely — per layer at L = 22, d = 128:
+
+| | kFLOP/token | share |
+|---|---|---|
+| FFN | 262.1 | 64.8 % |
+| QKV projection | 98.3 | 24.3 % |
+| out projection | 32.8 | 8.1 % |
+| **attention** | **11.3** | **2.8 %** |
+
+Attention is 2.8 % of the work, so padding it is nearly free; padding the
+**projections** is the whole waste — 45 % overhead on the 97 % that is dense
+GEMM. The right fix for a transformer in this domain is therefore **packed
+projections with padded (dense) attention**: run LN/QKV/out/FFN on the packed
+(T, D) stream, scatter to (B, 22) only around the attention step, gather back.
+That recovers ~1.44x on 97 % of the cost, which would take the measured
+653-690 k tracks/s to roughly **0.95-1.0 M** — still ~4x below the minGRU, so
+no conclusion here changes, but it is the honest number and it is the one a
+referee would ask for.
