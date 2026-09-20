@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-device throughput figure for the ICLR_v2 (minGRU main line) draft.
+"""Throughput figure for the ICLR_v2 (minGRU main line) draft.
 
 Same design as scripts/plot_throughput_cross_device.py -- the GPU curves read
 against a batch-size axis on top, the ACTS Kalman-filter CPU scan against a
@@ -10,7 +10,7 @@ The RTX 5000 Ada series is still the Mamba-2 model: the collaborator has not
 re-run the benchmark on the minGRU yet, so that curve is labelled as such and
 must not be read as a minGRU number.
 
-Usage: plot_throughput_v2.py <h100_v2_log_dir> <ada_log_dir> <out_dir>
+Usage: plot_throughput_v2.py <h100_v2_log_dir> <ada_log_dir|none> <out_dir>
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def parse(log_dir: Path, tag: str):
 
 
 def main() -> int:
-    h100_dir, ada_dir, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    h100_dir, ada_dir, out = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
     out.mkdir(parents=True, exist_ok=True)
 
     fig, ax_t = plt.subplots(figsize=(5.0, 3.3))
@@ -76,9 +76,11 @@ def main() -> int:
         lines.append(f"H100 NVL  {tag:24s} peak {thr[b]:,} tracks/s at bs {b:,}"
                      f"  ({vram.get(b, float('nan')):.1f} GiB)")
 
-    # The Ada curve is the Mamba-2 model (collaborator's bench_logs_v2): kept
-    # for the device comparison, explicitly labelled, to be re-measured.
-    ada, _ = parse(ada_dir, "R2Lnoconv_2L")
+    # The Ada logs are the Mamba-2 model (collaborator's bench_logs_v2).  Pass
+    # "none" as the Ada directory to leave that device out entirely, which is
+    # what the paper does while the minGRU measurement is outstanding: a stale
+    # curve next to a "TBD" in the table is worse than no curve.
+    ada = {} if str(ada_dir) == "none" else parse(ada_dir, "R2Lnoconv_2L")[0]
     if ada:
         bs = sorted(ada)
         ax_t.plot(bs, [ada[b] / 1e6 for b in bs], color="0.45", ls="--", marker="s",
@@ -117,7 +119,7 @@ def main() -> int:
                 loc="upper center", bbox_to_anchor=(0.5, -0.28), ncol=2,
                 framealpha=0.9, borderaxespad=0.0, columnspacing=1.2,
                 handlelength=1.8)
-    stem = out / "throughput_mingru_h100_vs_ada"
+    stem = out / "throughput_mingru_h100_vs_cpu"
     fig.savefig(f"{stem}.pdf", bbox_inches="tight")
     fig.savefig(f"{stem}.png", dpi=110, bbox_inches="tight")
     plt.close(fig)
