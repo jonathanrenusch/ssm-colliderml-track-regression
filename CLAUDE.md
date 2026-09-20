@@ -2555,6 +2555,25 @@ a loss spike at ~24 k steps (0.074 -> 0.403) overflowed a gradient and NaN'd the
 weights in one update (`V2_mingru_fp16_noscaler_DIVERGED.log`) — loss scaling is
 part of the recipe, not a confound; rerun under `precision: 16-mixed`.
 
+**PRECISION RULE (user decision, 2026-09-20): train in strict fp32, switch to
+fp16 only at inference.** Standing policy for this R&D branch. What the
+measurements say in support:
+* fp16 buys **nothing** in training here — 55.3 vs 55.6 it/s. The step is bound
+  by the eager padded path, the fp32 scan and the loader, not by the GEMMs, so
+  there is no throughput to trade for coarser arithmetic.
+* fp16 training **needs loss scaling** and diverges without it: a loss spike at
+  ~24 k steps (0.074 -> 0.403) overflowed a gradient and NaN'd the weights in
+  one update. That is an extra failure mode for no gain.
+* strict fp32 keeps every ablation arm on the same arithmetic, which is what
+  makes the cross-architecture comparison valid at all.
+* at inference fp16 IS worth it, now that the packed kernel consumes it
+  natively: +4 % (h=194) to +23 % (h=192) and **-45 % VRAM**, with physics
+  unchanged.
+Note on the mechanism, for the record: fp16 does not make the model see less
+data — the epoch count and sample count are identical. What it lowers is the
+precision of each accumulated update. The conclusion is the same either way;
+with zero speed-up on offer there is simply nothing to buy with that precision.
+
 **Throughput does NOT track projection FLOPs at this size**
 (`scripts/mingru_flop_scaling.py`, packed kernel, identical at 32 k and 131 k
 tracks/batch): below h ~ 192 a FLOP cut returns only 60-75 % of itself (2.00x
