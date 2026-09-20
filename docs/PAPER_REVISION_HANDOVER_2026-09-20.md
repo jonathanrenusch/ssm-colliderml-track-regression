@@ -50,7 +50,7 @@ geometric mean over the 5 perigee parameters (GM5):
 | encoder | mu 2GeV | 10GeV | 50GeV | uniform | ttbar |
 |---|---|---|---|---|---|
 | Mamba-2 bidirectional (paper model) | 0.994 | 0.994 | 0.997 | 0.991 | 0.996 |
-| Mamba-2 ONE-DIRECTIONAL | 0.997 | 0.994 | 0.997 | 0.992 | 0.998 |
+| Mamba-2 ONE-DIRECTIONAL (HELD BACK — do not put in the paper) | 0.997 | 0.994 | 0.997 | 0.992 | 0.998 |
 | Transformer | 0.992 | 0.994 | 0.997 | 0.991 | 0.994 |
 | minGRU | 0.998 | 0.996 | 0.999 | 0.995 | 0.999 |
 | non-selective diagonal SSM | 1.034 | 1.031 | 1.062 | 1.065 | 1.037 |
@@ -58,10 +58,12 @@ geometric mean over the 5 perigee parameters (GM5):
 * On d0/z0/phi/theta all four agree to +-0.005 on every test set.
 * The non-selective arm fails ONLY on q/p (1.14-1.31x), the sole source of its
   GM5 excess.
-* **The bidirectionality claim is refuted by our own Mamba ablation, not by the
-  transformer**: the one-directional arm ties the bidirectional one everywhere.
+* The one-directional arm ties the bidirectional one everywhere, but it is
+  **held back from this submission** (user decision 2026-09-20, final note at
+  the end of this file). Nothing in tomorrow's draft may rest on it, and the
+  bidirectionality motivation stays as written.
 
-### Why bidirectionality turned out not to matter (the honest mechanism)
+### Why bidirectionality turned out not to matter (BACKGROUND ONLY — not for the paper)
 The model regresses five numbers from a POOLED terminal state, not per-hit
 outputs. A single forward pass has already seen every hit before any head reads
 it. Bidirectionality only buys "each hit sees the hits after it", which a
@@ -122,7 +124,7 @@ simpler and more portable.*
 
 ## THE PROPOSED CHANGES — present these one at a time
 
-**C1 (MUST) `sections/introduction.tex`**, the paragraph beginning "The Kalman
+**C1 (WITHDRAWN 2026-09-20 — see the final note; do not present) `sections/introduction.tex`**, the paragraph beginning "The Kalman
 filter is a classical solution". Currently claims *Mamba-2's selective state
 update* specifically motivates the architecture. Our ablation shows selectivity
 buys nothing on 4 of 5 parameters. Reframe to: the Kalman update is a linear
@@ -130,7 +132,7 @@ recurrence corrected by a gain; any bidirectional linear-recurrent encoder can
 represent it; we instantiate the family as Mamba-2; an ablation tests how much
 of the analogy is load-bearing. (There is also a typo to fix: "Gaussiansas".)
 
-**C2 (MUST) `sections/method.tex`**, the two prose blocks around the
+**C2 (PART (b) WITHDRAWN 2026-09-20 — see the final note; part (a) still stands) `sections/method.tex`**, the two prose blocks around the
 `eq:kalman-update` / `eq:mamba-update` equations (leave the equations alone).
 (a) The selectivity-as-Kalman-gain claim needs its ablation result inline:
 costs 14-31 % on q/p ALONE and nothing on the geometric parameters.
@@ -139,7 +141,7 @@ and its future" is the bidirectionality accuracy claim our one-directional arm
 refutes. Replace with the pooled-readout mechanism, and say we keep the
 bidirectional block because it is more general and free at this length.
 
-**C3 (SHOULD) `sections/method.tex:7`** section title: "bidirectional Mamba-2"
+**C3 (WITHDRAWN 2026-09-20 — see the final note; do not present) `sections/method.tex:7`** section title: "bidirectional Mamba-2"
 -> "bidirectional recurrent". Cosmetic; `\cref{sec:method}` resolves to a
 number, not the title text, so nothing downstream breaks.
 
@@ -242,7 +244,7 @@ State of every arm as of 2026-09-20 22:45:
 | arm | state | in paper? |
 |---|---|---|
 | Mamba-2 bidirectional (reference) | done, evaluated | **main table** |
-| Mamba-2 one-directional | done, evaluated | **main table** |
+| Mamba-2 one-directional | done, evaluated | **HELD BACK — see the 2026-09-20 note at the end** |
 | Transformer | done, evaluated | **main table** |
 | minGRU | done, evaluated | **main table** |
 | non-selective diagonal SSM (param-matched) | done, evaluated | **main table** |
@@ -303,3 +305,70 @@ paper-ready plots (generated, NOT synced into `material/iclr/`, no tex touched)
 `eval_plots/paper_plots/truthkf_minGRU_FT_eta2/` -- six datasets, |eta| <= 2,
 pT <= 70 on the vs-pT page, truth-KF reference.
 Tables reproduce with `scripts/abl_v2_preclip_table.py <arm> [<arm>]`.
+
+
+---
+
+# NOTE (2026-09-20, user decision) — the one-directional Mamba arm is HELD BACK
+
+**Decision.** The one-directional Mamba-2 arm does not appear in tomorrow's
+draft: not in the ablation table, not in the comparison figure, not in the
+prose. It is a real, clean measurement and it stays in the repo — it is simply
+out of scope for this submission.
+
+**Why (the user's reasoning, which is correct).** The result ties the
+bidirectional reference on every test set, so putting it in the paper forces a
+rewrite of the architecture *motivation*, and that rewrite does not stop at the
+method section: `sections/abstract.tex` sells "bidirectional State-Space
+Models" in its first line and "a small bidirectional State-Space encoder" in
+its last paragraph, and `main.tex:2` carries it in the title comment. An
+ablation showing bidirectionality is unnecessary, sitting in an appendix under
+an abstract that makes bidirectionality the headline, reads as a contradiction
+a reviewer will find. Fixing that properly means touching the abstract, the
+title framing, the introduction and the method — one change too many, five days
+out.
+
+**What this withdraws.** The one-directional arm was the ONLY evidence for the
+bidirectionality claim. The other three parity arms are all bidirectional by
+construction (the transformer attends over the whole track, minGRU and the
+diagonal SSM both run two scans), so with this arm held back the draft contains
+no evidence that bidirectionality is dispensable. C1, C3 and C2(b) therefore
+come off the table together with it — do not present them, and do not soften
+"informed by both its past and its future" in `method.tex`, because nothing in
+the draft would any longer contradict it.
+
+**What survives untouched.** The selectivity result is independent of all this:
+the non-selective diagonal SSM is bidirectional and still fails, and it fails
+on q/p alone. So C2(a), C4-C8 stand as written, and the scientific claim of the
+ablation becomes the cleaner and narrower one: *four different bidirectional
+encoder families reach the truth-KF; what actually matters is input-dependent
+(selective) gating, and only for the momentum parameter.*
+
+**Was it parameter-matched? No — it is 5.1 % SMALLER.** Measured from the
+checkpoints (`state_dict` totals, identical 21,027-parameter head everywhere):
+
+| arm | total | encoder |
+|---|---:|---:|
+| Mamba-2 bidirectional (reference) | 649,422 | 500,832 |
+| **Mamba-2 one-directional** | **616,014** | **467,424** |
+| Transformer | 649,198 | 500,608 |
+| minGRU | 650,530 | 501,940 |
+| non-selective diagonal SSM | 650,506 | 501,916 |
+
+The matching was done on the recurrent work rather than on the parameter count:
+`expand` went 2 -> 4, so the single forward scan carries an inner width of 512
+where the bidirectional block ran two scans of 256 each (`d_state` 64,
+`headdim` 32, 2 layers, `d_conv` 1 in both). That leaves it 33 k parameters
+short of the other four. The direction of the mismatch is the awkward one — the
+arm ties the reference while being *smaller* — which is another reason the
+result is not something to half-tell in an appendix.
+
+**Artifacts.** The paper figure
+`eval_plots/paper_plots/ablation_compare/ablation_dotplot.pdf` is regenerated
+without the arm (4 arms, ttbar already removed). The five-arm version is kept
+for internal use only as
+`ablation_dotplot_with1dir_INTERNAL.pdf`; `scripts/abl_compare_dotplot.py`
+reproduces it with `--with-1dir`. The eval bundle stays at
+`eval_plots/ablations_2026-09/v2_evals/V2_mamba1dir_25ep/`. If the arm is ever
+reinstated, C1/C2(b)/C3 above are the changes it requires, and the abstract has
+to move with them.

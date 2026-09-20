@@ -222,10 +222,15 @@ def mingru_bidi_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
     assert four_h == 4 * H, (four_h, H)
     B = cu_seqlens.numel() - 1
     out = torch.empty(T, 2 * H, device=zn.device, dtype=zn.dtype)
+    # Triton launches on the CURRENT cuda device, so a tensor living on a
+    # different one fails with "Pointer argument cannot be accessed".
+    # Benchmarks that select a GPU with --device cuda:N rather than
+    # CUDA_VISIBLE_DEVICES hit exactly that; pin the context here.
     grid = lambda meta: (B, triton.cdiv(H, meta["BD"]), 2)  # noqa: E731
-    _mingru_bidi_packed_kernel[grid](
-        zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
-    )
+    with torch.cuda.device(zn.device):
+        _mingru_bidi_packed_kernel[grid](
+            zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
+        )
     return out
 
 
@@ -437,10 +442,15 @@ def mingru_inward_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
     assert two_h == 2 * H, (two_h, H)
     B = cu_seqlens.numel() - 1
     out = torch.empty(T, H, device=zn.device, dtype=zn.dtype)
+    # Triton launches on the CURRENT cuda device, so a tensor living on a
+    # different one fails with "Pointer argument cannot be accessed".
+    # Benchmarks that select a GPU with --device cuda:N rather than
+    # CUDA_VISIBLE_DEVICES hit exactly that; pin the context here.
     grid = lambda meta: (B, triton.cdiv(H, meta["BD"]))  # noqa: E731
-    _mingru_inward_packed_kernel[grid](
-        zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
-    )
+    with torch.cuda.device(zn.device):
+        _mingru_inward_packed_kernel[grid](
+            zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
+        )
     return out
 
 
