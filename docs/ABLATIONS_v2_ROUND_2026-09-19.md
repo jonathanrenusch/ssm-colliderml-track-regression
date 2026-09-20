@@ -232,3 +232,53 @@ question, which is what these 25-epoch runs are for.
 Practical consequence noticed during a smoke test: a physics eval of an
 eager-path arm takes considerably longer than a kernel-path one. That is
 slowness, not a defect.
+
+## Deployment throughput of the arms (2026-09-20, H100 NVL, same store/flags)
+
+All parameter-matched at ~0.65 M; `bench_infer_flat.py --gpu-seed
+--matmul-precision high`, GPU seed (fp64) inside the timed loop. Measured with
+the minGRU fine-tune running on two other GPUs, so absolute values carry a few
+per cent of contention; the ordering does not.
+
+| encoder | 32 k | 131 k | VRAM @131 k |
+|---|---|---|---|
+| minGRU, fp16 encoder (native kernel) | 3.23 M | **4.09 M** | **6.09 GiB** |
+| minGRU, fp32 encoder (TF32 matmuls) | 3.17 M | 3.93 M | 11.10 GiB |
+| Mamba-2 deployment model (4.32) | 1.85 M | 1.91 M | 14.6 GiB |
+| **Transformer** | **0.690 M** | **0.693 M** | 17.40 GiB |
+
+**Four backbones reach the truth-KF's precision and differ by ~6x in
+throughput** — so the architecture choice is a pure deployment decision, which
+is a cleaner claim than "our architecture is better".
+
+The transformer is the instructive case: physics within +-0.005 GM5 of every
+other arm, but 4.7x (32 k) to 5.9x (131 k) slower and 2.9x the memory, and its
+curve is FLAT from 32 k to 131 k — it is already saturated where the recurrent
+arms still have headroom. Two structural reasons, not tuning:
+1. it cannot use the packed path (attention over a packed 2048-track batch of
+   <=20-hit tracks is a ~31k x 31k matrix per head, O((B*L)^2), ~40 GB), so it
+   runs padded at 20 tokens instead of the true 13.3 — a third of the
+   projection work wasted before anything else;
+2. no fused kernel: LayerNorm + QKV + SDPA + out-proj + two FFN GEMMs per
+   layer. At L = 20 the attention is nearly free; the cost is launches and
+   small GEMMs, exactly where the single fused scan wins.
+Roughly 1.5x padding + ~3x kernel efficiency.
+
+### fp16 only pays with a kernel that takes fp16 natively
+
+| matmul | encoder | 131 k |
+|---|---|---|
+| strict fp32 | fp32 | 1.69 M |
+| strict fp32 | fp16 | 2.67 M (+58 %) |
+| TF32 | fp32 | 3.93 M |
+| TF32 | fp16, cast at the scan boundary | 2.90 M (**slower**) |
+| TF32 | fp16, kernel converts on load | **4.09 M**, 6.09 GiB |
+
+fp16 GEMMs are worth +58 % over strict IEEE fp32, but TF32 already captures
+that, so fp16-vs-TF32 is nearly a wash on compute — and materialising an fp32
+copy of the (T, 4H) projection per layer turned it into a 26 % LOSS. With the
+kernel converting on load (a register convert on a load that happens anyway),
+fp16 edges ahead **and halves the memory**. The speed gain is small because
+both the H100 and the Ada run this model at only ~8 % of their TF32
+tensor-core peak — neither is arithmetic-bound — so the prize is the VRAM,
+which is what decides the batch that fits on a 32 GB card.
