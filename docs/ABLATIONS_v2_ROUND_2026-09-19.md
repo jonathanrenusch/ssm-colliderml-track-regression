@@ -269,7 +269,23 @@ both do exactly this block-diagonal attention over a `cu_seqlens` stream. Only
 *naive* packed attention is O((B*L)^2).
 
 The fair comparison is the transformer on its own fast path (packed,
-flash-varlen, fp16) against the minGRU on its own — measured separately below.
+flash-varlen, fp16) against the minGRU on its own. **That number is still
+UNMEASURED.** A quick monkeypatch attempt (set `enc.encoder.attn_type =
+'flash-varlen'`, bind the parent `forward`) produced 14.9 k tracks/s at 32 k,
+which is not a property of flash-attention but a broken patch: a batch scan
+gives 0.041 s at 4 k and 2.202 s at 32 k, i.e. **8x the tokens for 53.7x the
+time, N^1.9** — the signature of the dense O((B*L)^2) block mask. The patch
+never reached flash-varlen; it fell through to the packed `torch` route.
+Discard 14.9 k. Doing it properly needs a flag on
+`_PaddedRoutedTransformerCLS` to skip the padded routing plus constructing the
+encoder with `attn_type: flash-varlen` (fp16 only), with a parity check against
+the padded path (~10 lines, ~30 min).
+
+**Bounds in the meantime**: 653-690 k is a LOWER bound; the padding waste is
+bounded at 20/13.2 = 1.5x, so a correct packed number lands near ~1 M — still
+~4x below the minGRU's 4.09 M, so no conclusion in this study depends on it.
+Quote the transformer as ">= 4x slower at equal physics, measured on the padded
+path" with the caveat, which understates rather than overstates our margin.
 What remains structurally true is the kernel-count argument: per layer the
 transformer launches LayerNorm + QKV + SDPA + out-proj + two FFN GEMMs, and at
 L = 20 the attention is nearly free, so the cost is launches and small GEMMs —
