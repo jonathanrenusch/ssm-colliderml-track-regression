@@ -253,16 +253,27 @@ is a cleaner claim than "our architecture is better".
 
 The transformer is the instructive case: physics within +-0.005 GM5 of every
 other arm, but 4.7x (32 k) to 5.9x (131 k) slower and 2.9x the memory, and its
-curve is FLAT from 32 k to 131 k — it is already saturated where the recurrent
-arms still have headroom. Two structural reasons, not tuning:
-1. it cannot use the packed path (attention over a packed 2048-track batch of
-   <=20-hit tracks is a ~31k x 31k matrix per head, O((B*L)^2), ~40 GB), so it
-   runs padded at 20 tokens instead of the true 13.3 — a third of the
-   projection work wasted before anything else;
-2. no fused kernel: LayerNorm + QKV + SDPA + out-proj + two FFN GEMMs per
-   layer. At L = 20 the attention is nearly free; the cost is launches and
-   small GEMMs, exactly where the single fused scan wins.
-Roughly 1.5x padding + ~3x kernel efficiency.
+curve is FLAT from 32 k to 131 k — already saturated where the recurrent arms
+still have headroom.
+
+**CAVEAT — this number handicaps the transformer and must not be published as
+is.** The ablation's transformer subclass routes packed batches through a
+PADDED attention path (`_PaddedRoutedTransformerCLS`), because the efficient
+packed route is flash-varlen, which is fp16/bf16 only and therefore excluded by
+this study's strict-fp32 training rule. That is the right call for TRAINING
+(all arms must share a precision), but it penalises the INFERENCE number twice:
+20 padded tokens instead of the true ~13.3 (1.5x of the projection work wasted)
+and no flash-attention at all. Packing is NOT impossible for transformers —
+`flash_attn_varlen_func` (installed here, 2.8.3) and FlexAttention block masks
+both do exactly this block-diagonal attention over a `cu_seqlens` stream. Only
+*naive* packed attention is O((B*L)^2).
+
+The fair comparison is the transformer on its own fast path (packed,
+flash-varlen, fp16) against the minGRU on its own — measured separately below.
+What remains structurally true is the kernel-count argument: per layer the
+transformer launches LayerNorm + QKV + SDPA + out-proj + two FFN GEMMs, and at
+L = 20 the attention is nearly free, so the cost is launches and small GEMMs —
+exactly where a single fused scan wins.
 
 ### fp16 only pays with a kernel that takes fp16 natively
 
