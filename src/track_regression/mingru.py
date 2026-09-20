@@ -615,3 +615,80 @@ class ComplexLRUCLSEncoder(MinGRUCLSEncoder):
                          max_len=max_len, compile_core=False)
         dims = [int(dim)] + [2 * int(hidden_size)] * (int(num_layers) - 1)
         self.layers = nn.ModuleList([_ComplexLRULayer(d, int(hidden_size)) for d in dims])
+
+
+# ---------------------------------------------------------------------------
+# Inward-only minGRU: one scan, outermost hit -> innermost, read out at the hit
+# nearest the beamline
+# ---------------------------------------------------------------------------
+
+
+class _MinGRUInwardLayer(nn.Module):
+    """A single INWARD minGRU scan (outermost hit -> innermost).
+
+    Hits are stored in detector geometry order, innermost first, so the
+    "inward" direction is the reverse scan and it terminates at hit 0 — the
+    hit nearest the beamline, which is where the perigee parameters are
+    defined.  That mirrors a Kalman filter propagating in to the beamline, and
+    it puts the freshest state where the answer is read.
+
+    Dropping the second direction is worth more than the obvious factor two,
+    because bidirectionality doubles BOTH a layer's output width and the next
+    layer's input width: for 2 layers at H = 194 the projection FLOPs go
+    800.8 k -> 249.9 k per token, **3.2x**, and the scan moves half the bytes.
+    """
+
+    def __init__(self, in_dim: int, hidden: int):
+        super().__init__()
+        self.in_dim, self.hidden = int(in_dim), int(hidden)
+        self.in_proj = nn.Linear(self.in_dim, 2 * self.hidden)   # [z | n], one direction
+        with torch.no_grad():
+            self.in_proj.bias.zero_()
+
+    def forward(self, x: Tensor, lens: Tensor) -> tuple[Tensor, Tensor]:
+        H = self.hidden
+        B, S = x.shape[0], x.shape[1]
+        p = torch.arange(S, device=x.device)
+        v = (p.unsqueeze(0) < lens.unsqueeze(1)).unsqueeze(-1)
+        zn = self.in_proj(x)
+        z, n = zn.split(H, dim=-1)
+        z = torch.sigmoid(z.float()) * v.float()      # pads -> a = 1, b = 0
+        n = n.float()
+        scan = (mingru_scan_autograd if os.environ.get("TRK_MINGRU_ADJOINT", "1") == "1"
+                else mingru_scan_parallel)
+        with torch.autocast("cuda", enabled=False):
+            # flip the whole padded row: pads are the identity map, so the
+            # reverse scan needs no per-row gather (same trick as the bidi layer)
+            h = scan((1.0 - z).flip(1), (z * n).flip(1))
+        seq = h.flip(1).to(x.dtype) * v               # back to storage order
+        return seq, seq[:, 0]                         # terminal = innermost hit
+
+
+class MinGRUInwardCLSEncoder(MinGRUCLSEncoder):
+    """:class:`MinGRUCLSEncoder` with a single INWARD scan.
+
+    Same recipe, same heads; only the direction count changes.  Motivated by
+    the ablation finding that a one-directional Mamba-2 matches the
+    bidirectional one on every test set (the regression reads a POOLED vector,
+    and one full pass has already seen every hit), plus the physics argument
+    that the readout belongs at the hit nearest the beamline.
+
+    NOTE the readout is ``seq[:, 0]`` — the innermost hit — not the terminal
+    element of the stored order.
+    """
+
+    _use_packed_kernel = False        # the fused kernel is bidirectional (grid axis 2)
+
+    def __init__(self, dim: int, hidden_size: int = 194, num_layers: int = 2,
+                 pool_out_dim: int = 256, dropout: float = 0.0,
+                 norm: str = "RMSNorm", max_len: int = 20, compile_core: bool = False):
+        super().__init__(dim=dim, hidden_size=hidden_size, num_layers=num_layers,
+                         pool_out_dim=pool_out_dim, dropout=dropout, norm=norm,
+                         max_len=max_len, compile_core=False)
+        dims = [int(dim)] + [int(hidden_size)] * (int(num_layers) - 1)   # H, not 2H
+        self.layers = nn.ModuleList([_MinGRUInwardLayer(d, int(hidden_size)) for d in dims])
+        pooled_in = int(hidden_size)
+        self.pool_norm = (nn.RMSNorm(pooled_in) if norm == "RMSNorm"
+                          else (nn.LayerNorm(pooled_in) if norm == "LayerNorm" else nn.Identity()))
+        self.pool_proj = (nn.Identity() if pooled_in == self._pool_out_dim
+                          else nn.Linear(pooled_in, self._pool_out_dim))

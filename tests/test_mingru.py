@@ -439,3 +439,53 @@ def test_packed_kernel_fp32_path_is_unchanged():
         z = torch.sigmoid(zn[s:e, :H]); n = zn[s:e, H:2 * H]
         ref = mingru_scan_ref((1 - z).unsqueeze(0), (z * n).unsqueeze(0))[0]
         assert torch.allclose(out[s:e, :H], ref, atol=1e-5)
+
+
+# --------------------------------------------------------------------------
+# Inward-only minGRU (one scan, readout at the hit nearest the beamline)
+# --------------------------------------------------------------------------
+
+
+def test_inward_layer_reads_out_at_the_innermost_hit():
+    """Hits are stored innermost-first, so the inward scan must terminate at
+    index 0 and must nevertheless have seen the outermost valid hit."""
+    from track_regression.mingru import MinGRUInwardCLSEncoder
+
+    torch.manual_seed(0)
+    enc = MinGRUInwardCLSEncoder(dim=32, hidden_size=16, num_layers=2)
+    x, lens = torch.randn(2, 20, 32), torch.tensor([7, 20])
+    with torch.no_grad():
+        seq, term = enc.layers[0](x, lens)
+        assert torch.equal(term, seq[:, 0]), "readout must be hit 0 (innermost)"
+
+        xp = x.clone(); xp[0, 6] += 5.0            # the OUTERMOST valid hit of track 0
+        _, t2 = enc.layers[0](xp, lens)
+        assert (t2[0] - term[0]).abs().max() > 1e-4, \
+            "the innermost readout must depend on the outermost hit"
+
+        xq = x.clone(); xq[0, 7:] = torch.randn(13, 32)     # pads only
+        _, t3 = enc.layers[0](xq, lens)
+        assert torch.allclose(t3[0], term[0], atol=1e-6), "pads leaked into the readout"
+
+
+def test_inward_encoder_is_cheaper_than_bidirectional():
+    """Dropping the second direction halves each layer's output width AND the
+    next layer's input width, so the saving compounds past a factor two."""
+    from track_regression.mingru import MinGRUCLSEncoder, MinGRUInwardCLSEncoder
+
+    bi = MinGRUCLSEncoder(dim=128, hidden_size=194, num_layers=2)
+    uni = MinGRUInwardCLSEncoder(dim=128, hidden_size=194, num_layers=2)
+    p_bi = sum(p.numel() for p in bi.parameters())
+    p_uni = sum(p.numel() for p in uni.parameters())
+    assert p_uni < p_bi / 2.0, f"expected >2x fewer params, got {p_bi}/{p_uni}"
+
+
+def test_inward_encoder_forward_shapes():
+    from track_regression.mingru import MinGRUInwardCLSEncoder
+
+    enc = MinGRUInwardCLSEncoder(dim=32, hidden_size=16, num_layers=2,
+                                 pool_out_dim=48).eval()
+    cu = torch.tensor([0, 5, 17], dtype=torch.int32)
+    with torch.no_grad():
+        seq, pooled = enc(torch.randn(1, 17, 32), cu_seqlens=cu)
+    assert seq.shape == (1, 17, 16) and pooled.shape == (2, 48)
