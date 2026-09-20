@@ -90,6 +90,17 @@ def build_model(config_path: Path, ckpt_path: Path, device: str):
 
 
 def apply_kernel(model, variant: str):
+    """Swap in the fused Mamba-2 scan kernels -- a no-op for other encoders.
+
+    ``apply_variant`` is Mamba-specific and raises on any encoder without the
+    padded-static hook (minGRU, GRU, transformer, ...).  Those backbones carry
+    their own fused kernels inside the encoder, so there is nothing to swap and
+    the right behaviour is to leave the model alone rather than fall back.
+    """
+    enc = getattr(getattr(model, "encoder", None), "__class__", None)
+    if enc is not None and "Mamba" not in enc.__name__:
+        print(f"[bench] {enc.__name__}: no Mamba kernel swap needed", flush=True)
+        return model, f"native:{enc.__name__}"
     from track_regression.mamba_short import apply_variant
     try:
         return (apply_variant(model, variant) or model), variant
