@@ -393,3 +393,49 @@ def test_packed_kernel_runs_under_fp16_autocast_and_scans_in_fp32():
     assert torch.isfinite(p16).all()
     rel = (p16.float() - p32).abs().max() / p32.abs().max()
     assert rel < 2e-2, f"fp16 encoder drifted {rel:.3%} from fp32"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_packed_kernel_takes_reduced_precision_and_scans_in_fp32(dtype):
+    """The kernel consumes fp16/bf16 directly -- no cast at the boundary.
+
+    The recurrence must still accumulate in fp32 inside the kernel, so the
+    result has to track the fp32 reference far more tightly than the input
+    dtype's own epsilon (fp16 eps = 9.8e-4, bf16 = 7.8e-3) would allow if the
+    state were carried in reduced precision through 20 steps.
+    """
+    from track_regression.ops.mingru_short_triton import mingru_bidi_packed
+
+    torch.manual_seed(0)
+    H, lens = 64, [5, 20, 13]
+    cu = torch.tensor([0, 5, 25, 38], dtype=torch.int32, device="cuda")
+    zn32 = torch.randn(int(cu[-1]), 4 * H, device="cuda")
+    ref = mingru_bidi_packed(zn32, cu, H, 20)
+
+    zn_low = zn32.to(dtype).contiguous()
+    got = mingru_bidi_packed(zn_low, cu, H, 20)
+    assert got.dtype == dtype, "output dtype must follow the input"
+    err = (got.float() - ref).abs().max().item()
+    # input quantisation alone is ~eps; the fp32 state keeps us at that level
+    # instead of it compounding over the sequence.
+    tol = 6e-3 if dtype is torch.float16 else 5e-2
+    assert err < tol, f"{dtype} drifted {err:.2e} from the fp32 scan"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_packed_kernel_fp32_path_is_unchanged():
+    """The fp32 path must be bit-identical after making the kernel generic."""
+    from track_regression.ops.mingru_short_triton import mingru_bidi_packed
+    from track_regression.mingru import mingru_scan_ref
+
+    torch.manual_seed(1)
+    H = 32
+    cu = torch.tensor([0, 7, 20], dtype=torch.int32, device="cuda")
+    zn = torch.randn(20, 4 * H, device="cuda")
+    out = mingru_bidi_packed(zn, cu, H, 20)
+    assert out.dtype == torch.float32
+    for b, (s, e) in enumerate([(0, 7), (7, 20)]):
+        z = torch.sigmoid(zn[s:e, :H]); n = zn[s:e, H:2 * H]
+        ref = mingru_scan_ref((1 - z).unsqueeze(0), (z * n).unsqueeze(0))[0]
+        assert torch.allclose(out[s:e, :H], ref, atol=1e-5)

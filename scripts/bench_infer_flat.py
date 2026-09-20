@@ -357,6 +357,12 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=20)
     ap.add_argument("--iters", type=int, default=200)
     ap.add_argument("--variant", default="v5pc", choices=["v5pc", "v5p", "v3c", "v0"])
+    ap.add_argument("--encoder-dtype", default=None,
+                    choices=["float32", "float16", "bfloat16"],
+                    help="run the ENCODER under autocast in this dtype (the input "
+                         "normalisation, Fourier encoding, heads, loss and the "
+                         "fp64 seed stay outside it; the minGRU scan casts back "
+                         "to fp32 at its kernel boundary). Default: the config's.")
     ap.add_argument("--matmul-precision", default="highest", choices=["highest", "high"],
                     help="highest = strict IEEE fp32 (default); high = TF32 in linear GEMMs")
     ap.add_argument("--loader-workers", type=int, default=8)
@@ -399,6 +405,11 @@ def main() -> None:
     GPU_SEED = bool(args.gpu_seed)
     PROFILE_RANGE = bool(args.profile_range)
     model = build_model(args.config, args.ckpt, dev)
+    if args.encoder_dtype:
+        import torch as _t
+        model.encoder_autocast_dtype = {"float32": _t.float32, "float16": _t.float16,
+                                        "bfloat16": _t.bfloat16}[args.encoder_dtype]
+        print(f"[bench] encoder autocast dtype = {args.encoder_dtype}", flush=True)
     model, used = apply_kernel(model, args.variant)
     batches = preload_batches(args.data_dir, args.batch_size, args.preload_batches, args.loader_workers)
 

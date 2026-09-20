@@ -310,13 +310,12 @@ class MinGRUCLSEncoder(nn.Module):
             h = x[0]
             H = self.hidden
             for layer in self.layers:
-                # The scan runs in strict fp32 even under a reduced-precision
-                # autocast: it is 0.25 % of the FLOPs, but a product of up to
-                # 20 gates in fp16 would lose mantissa and can underflow the
-                # 6e-8 subnormal floor.  The projections (all of the cost) stay
-                # in whatever dtype autocast chose.
+                # No cast at the boundary: the kernel takes fp32/fp16/bf16 and
+                # converts on load in registers, accumulating the recurrence in
+                # fp32 regardless.  Materialising an fp32 copy of this (T, 4H)
+                # tensor instead costs ~20 % of the forward (measured).
                 h = mingru_bidi_packed(
-                    layer.in_proj(h).float().contiguous(), cu, H, self.max_len)
+                    layer.in_proj(h).contiguous(), cu, H, self.max_len)
             term = torch.cat(
                 [h[cu[1:].long() - 1, :H], h[cu[:-1].long(), H:]], dim=-1)
             pooled = self.pool_proj(self.pool_norm(term))
