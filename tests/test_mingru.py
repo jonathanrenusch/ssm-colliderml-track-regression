@@ -489,3 +489,31 @@ def test_inward_encoder_forward_shapes():
     with torch.no_grad():
         seq, pooled = enc(torch.randn(1, 17, 32), cu_seqlens=cu)
     assert seq.shape == (1, 17, 16) and pooled.shape == (2, 48)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_inward_packed_kernel_matches_the_eager_path():
+    """The single-direction fused kernel must compute the same function as the
+    padded eager route, including the innermost-hit readout."""
+    import os
+
+    from track_regression.mingru import MinGRUInwardCLSEncoder
+
+    torch.manual_seed(0)
+    enc = MinGRUInwardCLSEncoder(dim=32, hidden_size=48, num_layers=2).cuda().eval()
+    cu = torch.tensor([0, 5, 25, 38], dtype=torch.int32, device="cuda")
+    x = torch.randn(1, 38, 32, device="cuda")
+    prev = os.environ.get("TRK_MINGRU_KERNEL")
+    try:
+        with torch.no_grad():
+            os.environ["TRK_MINGRU_KERNEL"] = "off"
+            s0, p0 = enc(x, cu_seqlens=cu)
+            os.environ["TRK_MINGRU_KERNEL"] = "auto"
+            s1, p1 = enc(x, cu_seqlens=cu)
+    finally:
+        if prev is None:
+            os.environ.pop("TRK_MINGRU_KERNEL", None)
+        else:
+            os.environ["TRK_MINGRU_KERNEL"] = prev
+    assert (p1 - p0).abs().max() < 2e-4, "pooled readout diverged"
+    assert (s1 - s0).abs().max() < 2e-4, "hit sequence diverged"

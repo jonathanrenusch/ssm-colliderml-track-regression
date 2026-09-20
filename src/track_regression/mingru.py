@@ -677,7 +677,25 @@ class MinGRUInwardCLSEncoder(MinGRUCLSEncoder):
     element of the stored order.
     """
 
-    _use_packed_kernel = False        # the fused kernel is bidirectional (grid axis 2)
+    _use_packed_kernel = True         # its own single-direction packed kernel
+
+    def forward(self, x, x_sort_value=None, seq_idx=None, cu_seqlens=None,
+                kv_mask=None, **kwargs):
+        """Packed inference path: one fused inward scan per layer."""
+        if (cu_seqlens is not None and x.is_cuda and not torch.is_grad_enabled()
+                and os.environ.get("TRK_MINGRU_KERNEL", "auto") not in ("off", "padded")):
+            from track_regression.ops.mingru_short_triton import mingru_inward_packed
+            cu = cu_seqlens.to(torch.int32)
+            h = x[0]
+            H = self.hidden
+            for layer in self.layers:
+                h = mingru_inward_packed(
+                    layer.in_proj(h).contiguous(), cu, H, self.max_len)
+            # readout = the innermost hit of each track = the first packed row
+            term = h[cu[:-1].long()]
+            return h.unsqueeze(0), self.pool_proj(self.pool_norm(term))
+        return super().forward(x, x_sort_value=x_sort_value, seq_idx=seq_idx,
+                               cu_seqlens=cu_seqlens, kv_mask=kv_mask, **kwargs)
 
     def __init__(self, dim: int, hidden_size: int = 194, num_layers: int = 2,
                  pool_out_dim: int = 256, dropout: float = 0.0,

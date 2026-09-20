@@ -377,3 +377,73 @@ def mingru_fused_proj_scan(x: torch.Tensor, weight: torch.Tensor, bias: torch.Te
 @mingru_fused_proj_scan.register_fake
 def _(x, weight, bias, cu_seqlens, hidden, max_len):
     return x.new_empty(x.shape[0], 2 * hidden, dtype=torch.float32)
+
+
+# ---------------------------------------------------------------------------
+# Inward-only packed scan: one direction, zn is [z | n] (2H), out is (T, H)
+# ---------------------------------------------------------------------------
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({"BD": 32}, num_warps=1),
+        triton.Config({"BD": 64}, num_warps=2),
+        triton.Config({"BD": 64}, num_warps=4),
+        triton.Config({"BD": 128}, num_warps=4),
+        triton.Config({"BD": 128}, num_warps=8),
+        triton.Config({"BD": 256}, num_warps=8),
+    ],
+    key=["H", "MAXL"],
+)
+@triton.jit
+def _mingru_inward_packed_kernel(
+    zn_ptr,      # (T, 2H) fp32/fp16/bf16 packed — [z | n]
+    cu_ptr,      # (B+1,) int32
+    out_ptr,     # (T, H) same dtype as zn
+    H: tl.constexpr,
+    MAXL: tl.constexpr,
+    BD: tl.constexpr,
+):
+    pid_b = tl.program_id(0)
+    pid_d = tl.program_id(1)
+    offs_d = pid_d * BD + tl.arange(0, BD)
+    dmask = offs_d < H
+
+    start = tl.load(cu_ptr + pid_b).to(tl.int64)
+    end = tl.load(cu_ptr + pid_b + 1).to(tl.int64)
+    Lr = end - start
+
+    h = tl.zeros((BD,), dtype=tl.float32)
+    for t in tl.range(0, MAXL):
+        valid = t < Lr
+        # INWARD: hits are stored innermost-first, so walk from the outermost
+        # hit down to index 0 and finish at the hit nearest the beamline.
+        phys = tl.where(valid, end - 1 - t, start)
+        base = zn_ptr + phys * (2 * H) + offs_d
+        zt = tl.sigmoid(tl.load(base, mask=dmask & valid, other=0.0).to(tl.float32))
+        nt = tl.load(base + H, mask=dmask & valid, other=0.0).to(tl.float32)
+        h = tl.where(valid, h + zt * (nt - h), h)
+        tl.store(out_ptr + phys * H + offs_d, h, mask=dmask & valid)
+
+
+@torch.library.custom_op("track_regression::mingru_inward_packed", mutates_args=())
+def mingru_inward_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
+                         hidden: int, max_len: int) -> torch.Tensor:
+    """``zn``: (T, 2H) = [z | n]; returns (T, H), the inward scan's state."""
+    assert zn.is_cuda and zn.is_contiguous()
+    assert zn.dtype in (torch.float32, torch.float16, torch.bfloat16), zn.dtype
+    T, two_h = zn.shape
+    H = int(hidden)
+    assert two_h == 2 * H, (two_h, H)
+    B = cu_seqlens.numel() - 1
+    out = torch.empty(T, H, device=zn.device, dtype=zn.dtype)
+    grid = lambda meta: (B, triton.cdiv(H, meta["BD"]))  # noqa: E731
+    _mingru_inward_packed_kernel[grid](
+        zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
+    )
+    return out
+
+
+@mingru_inward_packed.register_fake
+def _(zn, cu_seqlens, hidden, max_len):
+    return zn.new_empty(zn.shape[0], hidden)
