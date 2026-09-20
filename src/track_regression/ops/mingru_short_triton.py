@@ -232,3 +232,148 @@ def mingru_bidi_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
 @mingru_bidi_packed.register_fake
 def _(zn, cu_seqlens, hidden, max_len):
     return zn.new_empty(zn.shape[0], 2 * hidden)
+
+
+# ---------------------------------------------------------------------------
+# Fused in-projection + scan: zn never reaches global memory
+# ---------------------------------------------------------------------------
+#
+# Profiling the deployed 2-layer encoder at 32 k tracks (TF32) showed the split
+# 58 % cuBLAS in_proj / 37 % scan.  The scan moves ~4 GB in 1.46 ms = ~2.7 TB/s
+# on a 3.35 TB/s card: it is memory-bound and already at ~82 % of roofline, so
+# nothing can be won inside it.  What CAN be removed is the round trip it feeds
+# on -- cuBLAS writes zn (T, 4H) and the scan reads it straight back, 2.7 GB per
+# layer of traffic that exists only because they are two kernels.
+#
+# This kernel computes its own slice of zn with tl.dot and consumes it in
+# registers.  Note tl.dot IS available on sm_89; what is Hopper-only (and still
+# avoided here) is TMA, warp specialisation and fp8.
+#
+# *** MEASURED VERDICT: 5-6x SLOWER.  DO NOT USE.  Kept as a documented
+# negative result so the idea is not retried blindly. ***
+#
+#   H=194, 32,768 tracks (425,619 tokens), H100, TF32:
+#     layer 1 (D=128): separate 1619 us | fused  7794 us  (0.21x)
+#     layer 2 (D=388): separate 2390 us | fused 14678 us  (0.16x)
+#
+# Why, quantitatively:
+#   * one track per program means tl.dot runs with M = PADL = 32 rows of which
+#     only ~13 are real hits, and z/n are separate tiles -> 274.9 G FLOPs
+#     issued against 84.6 G needed, 3.3x too much arithmetic;
+#   * with H=194 and BD=64 there are 8 programs per track (4 channel blocks x
+#     2 directions), each loading the whole (PADL, D) x tile -> x is read
+#     4.00 GiB instead of 0.20 GiB, 19.7x redundant;
+#   * that costs MORE than the 2.46 GiB zn round trip it removes: net +1.34 GiB.
+#
+# The tension is structural, not a bug: the GEMM wants a large M (all 425 k
+# tokens batched into big tensor-core tiles, which is exactly what cuBLAS does
+# and why it reaches 20-24 % of TF32 peak on a K=128 skinny GEMM), while the
+# scan wants per-track sequential access with per-track boundaries.  Fusing
+# forces one track per program and starves the GEMM.
+#
+# A design that could work would process MANY tracks per program (M = 128
+# tokens spanning several tracks), keep the GEMM efficient, and scan each
+# segment inside the tile -- but that needs variable segment boundaries within
+# a register tile and (128, BD) accumulators.  That is a project, not a patch.
+#
+# What IS worth having instead, in order of value:
+#   1. hidden 192 rather than 194 (measured 25 % faster, 1 % fewer parameters
+#      -- the launch grid is cdiv(H, BD); needs a retrain, so it is a decision
+#      for the next round, not a kernel change);
+#   2. fp16 into the scan (already supported above: +4 % and -45 % VRAM);
+#   3. leave the in_proj to cuBLAS.
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({"BD": 32, "BK": 32}, num_warps=2),
+        triton.Config({"BD": 32, "BK": 64}, num_warps=4),
+        triton.Config({"BD": 64, "BK": 32}, num_warps=4),
+        triton.Config({"BD": 64, "BK": 64}, num_warps=4),
+        triton.Config({"BD": 64, "BK": 128}, num_warps=8),
+        triton.Config({"BD": 128, "BK": 64}, num_warps=8),
+    ],
+    key=["H", "D", "MAXL"],
+)
+@triton.jit
+def _mingru_fused_proj_scan_kernel(
+    x_ptr,       # (T, D) packed token features
+    w_ptr,       # (4H, D) nn.Linear weight  (zn = x @ w.T + b)
+    b_ptr,       # (4H,) bias
+    cu_ptr,      # (B+1,) int32
+    out_ptr,     # (T, 2H) [h_fwd | h_bwd]
+    H: tl.constexpr, D: tl.constexpr, MAXL: tl.constexpr,
+    BD: tl.constexpr, BK: tl.constexpr, PADL: tl.constexpr,
+):
+    pid_b = tl.program_id(0)
+    pid_d = tl.program_id(1)
+    pid_dir = tl.program_id(2)
+
+    start = tl.load(cu_ptr + pid_b).to(tl.int64)
+    end = tl.load(cu_ptr + pid_b + 1).to(tl.int64)
+    Lr = end - start
+
+    offs_l = tl.arange(0, PADL)                      # token rows of this track
+    offs_d = pid_d * BD + tl.arange(0, BD)           # channel block
+    lmask = offs_l < Lr
+    dmask = offs_d < H
+
+    z_col = pid_dir * 2 * H + offs_d                 # columns of zn for this block
+    n_col = z_col + H
+
+    acc_z = tl.zeros((PADL, BD), dtype=tl.float32)
+    acc_n = tl.zeros((PADL, BD), dtype=tl.float32)
+    for k0 in tl.range(0, D, BK):
+        offs_k = k0 + tl.arange(0, BK)
+        kmask = offs_k < D
+        xt = tl.load(x_ptr + (start + offs_l[:, None]) * D + offs_k[None, :],
+                     mask=lmask[:, None] & kmask[None, :], other=0.0).to(tl.float32)
+        # w is (4H, D): element (k, n) of the (BK, BD) tile is w[col_n, k]
+        wz = tl.load(w_ptr + z_col[None, :] * D + offs_k[:, None],
+                     mask=kmask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
+        wn = tl.load(w_ptr + n_col[None, :] * D + offs_k[:, None],
+                     mask=kmask[:, None] & dmask[None, :], other=0.0).to(tl.float32)
+        acc_z += tl.dot(xt, wz, allow_tf32=True)
+        acc_n += tl.dot(xt, wn, allow_tf32=True)
+    acc_z += tl.load(b_ptr + z_col, mask=dmask, other=0.0).to(tl.float32)[None, :]
+    acc_n += tl.load(b_ptr + n_col, mask=dmask, other=0.0).to(tl.float32)[None, :]
+
+    # --- scan the block we just produced, in registers ---------------------
+    o_off = pid_dir * H
+    h = tl.zeros((BD,), dtype=tl.float32)
+    for t in tl.range(0, MAXL):
+        valid = t < Lr
+        idx = tl.where(pid_dir == 0, t, Lr - 1 - t)
+        sel = tl.arange(0, PADL) == idx
+        zt = tl.sum(tl.where(sel[:, None], acc_z, 0.0), 0)
+        nt = tl.sum(tl.where(sel[:, None], acc_n, 0.0), 0)
+        zt = tl.sigmoid(zt)
+        h = tl.where(valid, h + zt * (nt - h), h)
+        phys = tl.where(valid, start + idx, start)
+        tl.store(out_ptr + phys * (2 * H) + o_off + offs_d, h,
+                 mask=dmask & valid)
+
+
+@torch.library.custom_op("track_regression::mingru_fused_proj_scan", mutates_args=())
+def mingru_fused_proj_scan(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
+                           cu_seqlens: torch.Tensor, hidden: int,
+                           max_len: int) -> torch.Tensor:
+    """``x`` (T, D) + the in_proj weights -> (T, 2H), with zn kept in registers."""
+    assert x.is_cuda and x.is_contiguous() and weight.is_contiguous()
+    T, D = x.shape
+    H = int(hidden)
+    assert weight.shape == (4 * H, D), (weight.shape, H, D)
+    B = cu_seqlens.numel() - 1
+    padl = max(16, triton.next_power_of_2(int(max_len)))
+    out = torch.empty(T, 2 * H, device=x.device, dtype=torch.float32)
+    grid = lambda meta: (B, triton.cdiv(H, meta["BD"]), 2)  # noqa: E731
+    _mingru_fused_proj_scan_kernel[grid](
+        x, weight, bias, cu_seqlens.to(torch.int32), out,
+        H=H, D=D, MAXL=int(max_len), PADL=padl,
+    )
+    return out
+
+
+@mingru_fused_proj_scan.register_fake
+def _(x, weight, bias, cu_seqlens, hidden, max_len):
+    return x.new_empty(x.shape[0], 2 * hidden, dtype=torch.float32)
