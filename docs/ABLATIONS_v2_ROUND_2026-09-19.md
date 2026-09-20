@@ -355,3 +355,40 @@ That recovers ~1.44x on 97 % of the cost, which would take the measured
 653-690 k tracks/s to roughly **0.95-1.0 M** — still ~4x below the minGRU, so
 no conclusion here changes, but it is the honest number and it is the one a
 referee would ask for.
+
+## minGRU deployment config: width x precision, END-TO-END (2026-09-20)
+
+Earlier width numbers were encoder-only; these are the full deployment path
+(GPU seed fp64 in-forward, Fourier front-end, heads, H2D), `bench_infer_flat
+--gpu-seed --matmul-precision high`, H100, 131 k tracks/batch. Untrained
+weights (throughput depends on shapes, not values); fine-tune running on two
+other GPUs, so absolute values carry a few per cent but each pair was measured
+back to back.
+
+| config | 32 k | 131 k | VRAM @131 k |
+|---|---|---|---|
+| h=194, fp32 (**what we deploy today**) | 3.35 M | 3.86 M | 11.1 GiB |
+| h=194, fp16 | — | 4.09 M | 6.09 GiB |
+| h=192, fp32 | 3.61 M | 4.48 M | 11.1 GiB |
+| **h=192, fp16** | — | **5.04 M** | **6.04 GiB** |
+
+1.31x over the current deployed config and 2.6x the paper's Mamba-2 model
+(1.91 M). h=192 gains more in fp16 (+23 %) than in fp32 (+16 %): with the GEMMs
+cheaper the scan's share rises, and the scan is what the width quantisation
+hits.
+
+**The width gain CANNOT be recovered by a smarter kernel** (correcting an
+earlier suggestion in this file): Triton's `tl.arange` needs a power-of-two
+length, so the channel block BD is in {32, 64, 128, 256}, and 194 = 2 x 97 with
+97 prime — no legal BD tiles it cleanly, at any size. 192 = 3 x 64 exactly. The
+autotuner is already choosing the best available option for both. So the 16-23 %
+requires the width change and therefore a retrain (25 ep stage 1 + 50 ep
+fine-tune, ~45 h).
+
+Status of the two levers:
+* **fp16 — available now**, no retrain, physics unchanged (<= 0.2 % GM5,
+  measured over 25 epochs), already in the `/eos` share bundle. Worth as much
+  for the halved VRAM as for the speed: it roughly doubles the batch that fits
+  on a 32 GB Ada.
+* **h=192 — next round.** Physics is *assumed* identical (1 % fewer parameters,
+  well inside the +-0.005 GM5 spread between arms) but has not been trained.
