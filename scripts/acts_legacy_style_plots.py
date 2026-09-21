@@ -38,6 +38,14 @@ from track_regression.eval_utils import iterative_rms_convergence  # noqa: E402
 from track_regression.paper_plots.plots._panels import fill_eta_stephist, make_grid  # noqa: E402
 from track_regression.paper_plots.stats import DISPLAY_SCALE, DISPLAY_UNIT  # noqa: E402
 
+# q/p is plotted in 1e-3/GeV, the convention acts_rms_curves.py already uses.
+# The raw residuals are ~5e-4, which puts labels like "-0.004" on the x axis --
+# they collide at the width these panels are printed at -- and writes
+# "0.000524 1/GeV" into the legend.  The shared DISPLAY_* tables are left alone
+# because the text reports format q/p in scientific notation from them.
+SCALE = {**DISPLAY_SCALE, "qop": 1e3}
+UNIT = {**DISPLAY_UNIT, "qop": r"$10^{-3}$/GeV"}
+
 
 # TRK_ABS_ETA_MAX: fiducial |eta| cut on every page (paper default 2.0 since
 # 2026-09-04: the shipped truth-KF is miscalibrated above ~80 GeV, |eta| > 2).
@@ -75,7 +83,7 @@ def residual_hist_pages(res: dict, out_dir: Path, dataset: str, subtitle: str, k
         fig, axes = make_grid()
         for i, p in enumerate(PARAMS):
             ax = axes[i]
-            scale, unit = DISPLAY_SCALE[p], DISPLAY_UNIT[p]
+            scale, unit = SCALE[p], UNIT[p]
             for arr, colour, tag in ((res[f"ssm_{p}"], "C0", "SSM"),
                                      (res[f"ckf_{p}"], "C3", kf_label)):
                 cut = iterative_rms_convergence(arr)

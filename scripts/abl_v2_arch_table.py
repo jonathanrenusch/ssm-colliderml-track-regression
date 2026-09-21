@@ -29,9 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paper_tab_ratios import _fmt, rms3  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1] / "eval_plots/ablations_2026-09/v2_residuals"
-FT_BUNDLE = (Path(__file__).resolve().parents[1]
-             / "eval_plots/paper_plots/truthkf_minGRU_FT_fp16_eta2")
-
 SETS = [("single_muon_2GeV", r"$\mu$, 2\,GeV"),
         ("single_muon_10GeV", r"$\mu$, 10\,GeV"),
         ("single_muon_50GeV", r"$\mu$, 50\,GeV"),
@@ -85,13 +82,13 @@ def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "main"
     n_boot = int(sys.argv[2]) if len(sys.argv) > 2 else 200
     root = Path(sys.argv[3]) if len(sys.argv) > 3 else ROOT
-    arms = list(ARMS)
     if mode == "main":
-        # The shipped model is the fine-tuned minGRU; show it next to the
-        # stage-1 arms so the reader sees what the second stage adds.
-        arms = [(FT_BUNDLE, r"minGRU, fine-tuned (this work)")] + \
-               [(root / a, lab) for a, lab in arms]
-        for bundle, label in arms:
+        # Stage-1 checkpoints only.  Every arm has had exactly the same
+        # training, which is what makes the comparison controlled; none of
+        # them has been fine-tuned, so all of them are a little worse than
+        # the paper's final model (user decision 2026-09-21: do not mix a
+        # fine-tuned row into this table).
+        for bundle, label in [(root / a, lab) for a, lab in ARMS]:
             pairs, n = load(Path(bundle), "single_muon_uniform")
             print(f"    {label:<30s} & {row(pairs, n, n_boot, True)} \\\\   % N = {n:,}")
         return 0
