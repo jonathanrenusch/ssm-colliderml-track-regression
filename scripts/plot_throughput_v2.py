@@ -28,11 +28,12 @@ THR_RE = re.compile(r"throughput\s*:\s*([\d,]+)\s*tracks/s")
 VRAM_RE = re.compile(r"peak VRAM\s*:\s*([\d.]+)\s*GiB")
 
 # (tag, legend label, style) -- H100 series, drawn in this order.
+# One curve only, and the legend names the model, not its hidden size or its
+# arithmetic: the width and the precision belong in the text, not on a figure
+# whose job is the device comparison (user, 2026-09-21).
 H100 = [
-    ("minGRU_h192_fp16", "minGRU $h{=}192$, fp16",
+    ("minGRU_h192_fp16", "minGRU",
      dict(color="C0", ls="-", marker="o", mfc="C0")),
-    ("minGRU_FT_h194_fp16", "minGRU $h{=}194$, fp16",
-     dict(color="C0", ls="-.", marker="D", mfc="white", ms=3.0)),
 ]
 
 
