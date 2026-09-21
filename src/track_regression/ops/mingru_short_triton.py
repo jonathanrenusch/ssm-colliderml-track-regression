@@ -36,6 +36,8 @@ embarrassingly parallel over B x D/BD; the only serial chain is L <= 20 FMAs.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -177,14 +179,19 @@ def _mingru_bidi_packed_kernel(
     o_off = pid_dir * H
 
     h = tl.zeros((BD,), dtype=tl.float32)
-    for t in tl.range(0, MAXL):
-        valid = t < Lr
+    # MAXL is a static bound, but a program owns ONE track, so its length Lr is
+    # uniform across every lane: the loop can exit at Lr with no divergence and
+    # no bucketing.  A track of 8 hits then costs 8 iterations instead of the
+    # 20 the masked loop used to issue.  Masked loads never moved memory, so
+    # what this removes is instruction issue -- which is what the scan is bound
+    # by at these lengths.
+    t = 0
+    while t < Lr:
         # forward reads the segment in order, backward from its end; both
         # write at the PHYSICAL row, so the output needs no un-flip.
         phys = start + t
         if pid_dir == 1:
             phys = end - 1 - t
-        phys = tl.where(valid, phys, start)
 
         base = zn_ptr + phys * (4 * H) + offs_d
         # `.to(tl.float32)` is a REGISTER convert on a load that has to happen
@@ -192,13 +199,13 @@ def _mingru_bidi_packed_kernel(
         # the largest intermediate while the recurrence still accumulates in
         # fp32.  A product of up to MAXL gates in fp16 would lose mantissa and
         # can underflow the 6e-8 subnormal floor, so the state never leaves fp32.
-        zt = tl.sigmoid(tl.load(base + z_off, mask=dmask & valid,
+        zt = tl.sigmoid(tl.load(base + z_off, mask=dmask,
                                 other=0.0).to(tl.float32))
-        nt = tl.load(base + n_off, mask=dmask & valid, other=0.0).to(tl.float32)
-        h = tl.where(valid, h + zt * (nt - h), h)
+        nt = tl.load(base + n_off, mask=dmask, other=0.0).to(tl.float32)
+        h = h + zt * (nt - h)
 
-        tl.store(out_ptr + phys * (2 * H) + o_off + offs_d, h,
-                 mask=dmask & valid)
+        tl.store(out_ptr + phys * (2 * H) + o_off + offs_d, h, mask=dmask)
+        t += 1
 
 
 @torch.library.custom_op("track_regression::mingru_bidi_packed", mutates_args=())
@@ -222,6 +229,7 @@ def mingru_bidi_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
     assert four_h == 4 * H, (four_h, H)
     B = cu_seqlens.numel() - 1
     out = torch.empty(T, 2 * H, device=zn.device, dtype=zn.dtype)
+    cu32 = cu_seqlens.to(torch.int32)
     # Triton launches on the CURRENT cuda device, so a tensor living on a
     # different one fails with "Pointer argument cannot be accessed".
     # Benchmarks that select a GPU with --device cuda:N rather than
@@ -229,7 +237,7 @@ def mingru_bidi_packed(zn: torch.Tensor, cu_seqlens: torch.Tensor,
     grid = lambda meta: (B, triton.cdiv(H, meta["BD"]), 2)  # noqa: E731
     with torch.cuda.device(zn.device):
         _mingru_bidi_packed_kernel[grid](
-            zn, cu_seqlens.to(torch.int32), out, H=H, MAXL=int(max_len),
+            zn, cu32, out, H=H, MAXL=int(max_len),
         )
     return out
 
