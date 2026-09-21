@@ -283,25 +283,39 @@ Every architecture arm uses an identical protocol. Verified from the configs:
 
 No per-architecture tuning of any kind.
 
-**The shared learning rate is nobody's optimum, and it handicaps the
-transformer most.** From the earlier matched-budget sweep
-(`eval_plots/ablations_2026-09/lr_sweep_table.txt`):
+**The shared learning rate is nobody's optimum.** An eleven-point sweep per
+architecture exists (`eval_plots/ablations_2026-09/lr_sweep_table.txt`,
+protocol in `INTERIM_REPORT.md` section 4): stage 1 at 46,000 steps over
+x1/8 to x8 of the production 5e-5, then the top three re-run at 138,000 steps
+to re-rank. 33 runs, none diverged, every optimum bracketed inside the grid.
+Selection statistic: pooled-val GM5 against the truth-KF on the identical 1 M
+validation subset — a selection statistic only, not comparable to the
+per-sample test ratios.
 
-| architecture | GM5 at the shared 5e-5 | GM5 at its own optimum | own optimum | handicap |
-|---|---|---|---|---|
-| Bi-GRU | 1.1974 | 1.1826 | 7.07e-5 | 1.3 % |
-| Bi-Mamba-2 | 1.1796 | 1.1480 | 1e-4 | 2.8 % |
-| **Transformer** | 1.2048 | 1.1154 | **2.5e-5** | **8.0 %** |
+| architecture | stage-1 minimum | selected after re-rank | x production |
+|---|---|---|---|
+| Bi-Mamba-2 | 0.996 at 2e-4 | **1e-4** | x2 |
+| Transformer | 1.089 at 7.07e-5 | **2.5e-5** | x0.5 |
+| Bi-GRU (minGRU class) | 1.183 at 7.07e-5 | **7.07e-5** | x1.41 |
 
-5e-5 is the production value, inherited from the Mamba-2 model. So the shared
-LR disadvantages the transformer by ~8 % and Mamba-2 by ~3 %, **and the
-transformer still reached parity** — which makes the parity claim conservative
-rather than flattering. Say so explicitly.
+The three span a factor of four and **none of them is the production value**,
+though 5e-5 sits inside the 3 % tie band of the recurrent minimum. The
+re-ranking also measures a short-horizon bias directly: the SSM prefers 2e-4
+at 46 k steps and 1e-4 at 138 k, drifting towards production as the budget
+grows.
 
-**Caveat that must travel with those numbers**: that sweep ran on v3 data at a
-matched *step* budget (921,600 steps), not on the v2 25-epoch runs. Only the
-direction transfers. Do not quote the 8 % as if it applied to the ablation
-table.
+**Do not repeat the earlier "the shared LR handicaps the transformer most by
+8 %" line — it was wrong.** It compared 5e-5 against each architecture's
+*selected* LR rather than its stage-1 minimum, which hid that the largest
+stage-1 gap is Mamba-2's. The defensible statement is the one now in the
+paper's appendix: the optima span 4x, the production value is nobody's
+optimum, the ablation runs 25 epochs (~100x the sweep budget) where the
+sensitivity is much smaller, and the single shared recipe is stated as a
+limitation rather than spun either way.
+
+**Second caveat that must travel with those numbers**: the sweep ran on v3
+data at a short step budget, not on the v2 25-epoch runs. Only the direction
+transfers.
 
 ### Which checkpoint
 
