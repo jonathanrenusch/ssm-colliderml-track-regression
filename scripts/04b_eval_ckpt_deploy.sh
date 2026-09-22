@@ -29,7 +29,9 @@ ENC_DTYPE_ARG=()
 if [ -n "${TRK_EVAL_ENCODER_DTYPE:-}" ]; then
   ENC_DTYPE_ARG=(--model.model.init_args.encoder_autocast_dtype "$TRK_EVAL_ENCODER_DTYPE")
 fi
-echo "deployment eval: matmul=$TRK_MATMUL_PRECISION bucket16=$TRK_SSD_BUCKET16 compile_frontend=$TRK_COMPILE_FRONTEND seed_dtype=$TRK_SEED_DTYPE encoder_dtype=${TRK_EVAL_ENCODER_DTYPE:-<config>}"
+# Precision-study flags (opt-in, read by the model/loss at construction; unset = unchanged):
+#   TRK_FRONTEND_DTYPE, TRK_HEADS_DTYPE (float16|bfloat16), TRK_QUANTILE_LADDER (cumsum|matmul).
+echo "deployment eval: matmul=$TRK_MATMUL_PRECISION bucket16=$TRK_SSD_BUCKET16 compile_frontend=$TRK_COMPILE_FRONTEND seed_dtype=$TRK_SEED_DTYPE encoder_dtype=${TRK_EVAL_ENCODER_DTYPE:-<config>} frontend_dtype=${TRK_FRONTEND_DTYPE:-<default>} heads_dtype=${TRK_HEADS_DTYPE:-<default>} quantile_ladder=${TRK_QUANTILE_LADDER:-cumsum}"
 for ds in ${EVAL_DATASETS:-single_muon_2GeV single_muon_10GeV single_muon_100GeV ttbar ttbar_new_pt1 single_muon_uniform}; do
   [ -d "$EVAL_ROOT/$ds/test" ] || { echo "=== $ds: not in $EVAL_ROOT, skipped"; continue; }
   echo "=== $ds  $(date)"

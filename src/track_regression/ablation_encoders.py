@@ -31,6 +31,7 @@ the batch is NaN, which bit the campaign at inference time
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 from torch import Tensor, nn
@@ -486,6 +487,16 @@ class _PaddedRoutedTransformerCLS(EncoderWithCLS):
                     else torch.ones(B, N, dtype=torch.bool, device=x.device))
             ht = x_sort_value
             return self._forward_via_padded(x, mask, lens, ht)
+
+        # Opt-in packed inference path (TRK_TXF_PACKED=1): the same function on
+        # the packed stream with a per-track attention kernel -- no padding of
+        # the projections, no scatter/gather around attention.  Inference only;
+        # the training path below is untouched.  See txf_packed.py.
+        if (x.is_cuda and not torch.is_grad_enabled()
+                and os.environ.get("TRK_TXF_PACKED", "0") == "1"
+                and self._identity_order):
+            from track_regression.txf_packed import packed_transformer_forward
+            return packed_transformer_forward(self, x, seq_idx, cu_seqlens)
 
         x_pad, row, pos, lens = _packed_to_padded(x, cu_seqlens)
         B, S = x_pad.shape[0], x_pad.shape[1]

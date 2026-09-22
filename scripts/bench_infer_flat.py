@@ -34,6 +34,7 @@ import yaml
 SEED_RESIDUALS = False
 GPU_SEED = False
 PROFILE_RANGE = False
+SEED_SHARE = False      # --seed-share: time the on-GPU seed separately inside the loop
 
 
 # --------------------------------------------------------------------------- #
@@ -282,13 +283,19 @@ def run(model, batches, warmup, iters, device):
         return {k: (v.to(device, non_blocking=True) if torch.is_tensor(v) else v)
                 for k, v in b.items()}
 
+    seed_events = []          # (start, end) CUDA events around the seed, --seed-share
     if GPU_SEED:
         from track_regression.seed_torch import gpu_seed_features
         names = ("d0", "z0", "phi", "theta", "qop")
         raw_model = model
         def model(b):                                   # noqa: F811  -- deployment path
             hf = b["hit_features"][0]
+            if SEED_SHARE:
+                e0 = torch.cuda.Event(enable_timing=True); e0.record()
             seed, res = gpu_seed_features(hf, b["cu_seqlens"])
+            if SEED_SHARE:
+                e1 = torch.cuda.Event(enable_timing=True); e1.record()
+                seed_events.append((e0, e1))
             b2 = dict(b); b2["hit_features"] = torch.cat([hf, res], 1).unsqueeze(0)
             out = raw_model(b2)
             anchors = {f"seed_{n}": seed[:, i] for i, n in enumerate(names)}
@@ -322,6 +329,16 @@ def run(model, batches, warmup, iters, device):
 
     per = [s.elapsed_time(e) for s, e in zip(starts, ends)]  # ms, incl. H2D
     peak_gib = torch.cuda.max_memory_allocated() / 2**30
+    if SEED_SHARE and seed_events:
+        timed = seed_events[-iters:]                       # the warm-up iterations are excluded
+        seed_ms = [a.elapsed_time(b) for a, b in timed]
+        mean_seed = sum(seed_ms) / len(seed_ms)
+        mean_batch = sum(per) / len(per)
+        tracks = n_tracks / iters
+        print(f"  seed (on GPU, {os.environ.get('TRK_SEED_DTYPE', 'float64')}) per batch : "
+              f"{mean_seed:.3f} ms = {1e3 * mean_seed / tracks:.4f} us/track", flush=True)
+        print(f"  seed share of the timed forward (incl. H2D)      : "
+              f"{100.0 * mean_seed / mean_batch:.1f} %   (batch {mean_batch:.3f} ms)", flush=True)
     return per, wall, n_tracks, peak_gib
 
 
@@ -363,6 +380,14 @@ def main() -> None:
                          "normalisation, Fourier encoding, heads, loss and the "
                          "fp64 seed stay outside it; the minGRU scan casts back "
                          "to fp32 at its kernel boundary). Default: the config's.")
+    ap.add_argument("--frontend-dtype", default=None, choices=["float16", "bfloat16"],
+                    help="TRK_FRONTEND_DTYPE: materialise the Fourier tensor and run the input-net "
+                         "GEMMs in this dtype (precision study; default = fp32 with TF32 matmuls)")
+    ap.add_argument("--heads-dtype", default=None, choices=["float16", "bfloat16"],
+                    help="TRK_HEADS_DTYPE: pool_head/output_head GEMMs in this dtype (precision study)")
+    ap.add_argument("--quantile-ladder", default=None, choices=["cumsum", "matmul"],
+                    help="TRK_QUANTILE_LADDER: prefix sum of the quantile ladder -- torch.cumsum "
+                         "(default) or one fp64 triangular GEMM (exact, see losses._ladder_prefix_sum)")
     ap.add_argument("--matmul-precision", default="highest", choices=["highest", "high"],
                     help="highest = strict IEEE fp32 (default); high = TF32 in linear GEMMs")
     ap.add_argument("--loader-workers", type=int, default=8)
@@ -370,6 +395,9 @@ def main() -> None:
     ap.add_argument("--seed-residuals", action="store_true", help="collate appends the 3 seed-residual hit features (P')")
     ap.add_argument("--profile-range", action="store_true", help="wrap the timed loop in cudaProfilerStart/Stop (for nsys --capture-range=cudaProfilerApi)")
     ap.add_argument("--gpu-seed", action="store_true", help="deployment mode: seed + residual features computed on the GPU inside the timed loop (collate gives 12 features)")
+    ap.add_argument("--seed-share", action="store_true",
+                    help="with --gpu-seed: also time the seed alone (CUDA events inside the loop) "
+                         "and print its share of the forward pass")
     ap.add_argument("--cuda-graph", action="store_true",
                     help="capture the forward in a CUDA graph (static shapes via dummy-track "
                          "padding) and time buffer-copy + replay — the small-batch launch-gap killer. "
@@ -400,10 +428,19 @@ def main() -> None:
     name = torch.cuda.get_device_name(dev)
     cap = "".join(map(str, torch.cuda.get_device_capability(dev)))
 
-    global SEED_RESIDUALS, GPU_SEED, PROFILE_RANGE
+    global SEED_RESIDUALS, GPU_SEED, PROFILE_RANGE, SEED_SHARE
     SEED_RESIDUALS = bool(args.seed_residuals)
     GPU_SEED = bool(args.gpu_seed)
     PROFILE_RANGE = bool(args.profile_range)
+    SEED_SHARE = bool(args.seed_share)
+    if SEED_SHARE and not GPU_SEED:
+        sys.exit("[bench] --seed-share needs --gpu-seed (the seed is only inside the timed loop there)")
+    # Precision-study flags are read by the model at construction (env vars).
+    for flag, env in ((args.frontend_dtype, "TRK_FRONTEND_DTYPE"),
+                      (args.heads_dtype, "TRK_HEADS_DTYPE"),
+                      (args.quantile_ladder, "TRK_QUANTILE_LADDER")):
+        if flag:
+            os.environ[env] = flag
     model = build_model(args.config, args.ckpt, dev)
     if args.encoder_dtype:
         import torch as _t
@@ -448,6 +485,11 @@ def main() -> None:
         "batch size": args.batch_size,
         "kernel switches": f"BUCKET16={os.environ.get('TRK_SSD_BUCKET16', '0')} "
                            f"COMPILE_FRONTEND={os.environ.get('TRK_COMPILE_FRONTEND', '0')}",
+        "precision flags": f"encoder={args.encoder_dtype or 'config'} "
+                           f"frontend={os.environ.get('TRK_FRONTEND_DTYPE') or 'fp32'} "
+                           f"heads={os.environ.get('TRK_HEADS_DTYPE') or 'fp32'} "
+                           f"ladder={os.environ.get('TRK_QUANTILE_LADDER', 'cumsum')} "
+                           f"seed={os.environ.get('TRK_SEED_DTYPE', 'float64')}",
         "seed mode": ("GPU (in timed loop)" if args.gpu_seed
                       else "CPU collate (+residuals)" if args.seed_residuals
                       else "GPU (auto, in model forward)"

@@ -2616,3 +2616,95 @@ bracket class AND keep the literal name out of the rest of the command, or kill
 by PID. Physics evals tolerate GPU contention and now run alongside training
 (the runs use ~2 GB of 96); **throughput does not**, and
 `scripts/abl_v2_throughput.sh` refuses a busy GPU by design.
+
+### 4.41 The transformer given the minGRU's kernel treatment (2026-09-21) — "gains nothing" was an un-packed path; the shared pipeline is 60 % of the minGRU forward
+
+User task (4 days before the full-paper deadline): make the ablation transformer as
+fast as possible under the physics gate, audit every kernel sentence of ICLR_v2 against
+the code, judge the minGRU kernel, recommend paper changes (no tex edited). Full
+write-up with the line-by-line paper audit and proposed replacement text:
+`docs/TRANSFORMER_PACKED_2026-09-21.md`.
+
+- **Built (additive, opt-in `TRK_TXF_PACKED=1`, inference only):** `txf_packed.py` (packed
+  augmented stream, two class tokens interleaved per track by index writes, index posenc as a
+  20-row lookup table, compiled glue) + `ops/attn_short_triton.py` (`attn_packed_tracks`: one
+  program per track, q/k/v RMSNorm fused, 4 heads in registers; `add_rmsnorm_packed`;
+  `gemm_epilogue_fp16`: fp16 Triton GEMM with bias / SiLU / LayerScale-residual+RMSNorm
+  epilogues → a layer is 5 kernels). Flags `TRK_TXF_PACKED_FUSED_GEMM=1` (fp16 only),
+  `_FUSED_NORM`, `_RESID16`, `_COMPILE[_MODE]`. `tests/test_txf_packed.py` (18 tests).
+- **Throughput (H100 NVL, 131 k/batch, GPU fp64 seed in loop; "as trained" = padded, strict
+  fp32, the training kernel, no switches):** transformer 0.480 M → **3.18 M tracks/s (6.6×)**
+  [ladder: padded fp16 0.73 → packed 2.47 → +fused norm 2.72 → +fused GEMMs 3.05 → +posenc
+  table 3.18; fp16 residual 3.28]; minGRU h194 0.793 → 4.07 M (5.1×), h192 0.880 → 5.31 M
+  (6.0×); Mamba-2 noconv 0.573 (v3c) → 1.74 M TF32 (3.0×); after the SSD kernel learned to read fp16 (§4.42) 0.579 → **2.06 M fp16 (3.6×)**, physics gate worst 0.0006. The doc's
+  "0.98 M padded minGRU" is the padded *Triton* kernel (0.983 M measured), not the training
+  path. Batch: transformer saturates from ~32 k (2.87 M) like the recurrences; CUDA graph at
+  2 048: 1.42 M (padded eager 0.36 M).
+- **Physics gate:** packed fp16 = reference `V2_txf_25ep` to ≤ 0.0005 on all 60 SSM/truth-KF
+  ratio cells (post+pre-clip, N identical); final fused-GEMM path ≤ 0.0008 (3 of 60 cells above
+  0.0005; the paper's own padded fp16 path deviates 0.0010) — **gate passed**. Real-batch deviations of every variant vs strict fp32 equal those of the padded
+  TF32/fp16 paths.
+- **Stage profile (torch.profiler, uncontended):** the "12 kernel launches per forward" in
+  the paper is wrong — minGRU *encoder* 27 kernels, full forward ~390 (fp64 seed 292,
+  heads+predict 67, compiled front end 5). At 131 k the h192 minGRU forward is seed 2.2 ms
+  (10 %) + Fourier front end 6.4 ms (**29 %**) + encoder 8.9 ms (40 %) + heads 4.8 ms
+  (**21 %**, mostly five `torch.cumsum` scans over 6-wide rows in `losses._ordered_from_raw`);
+  a measurement-only triangular-matmul ladder gives **+19 % (5.31 → 6.34 M)** for the minGRU
+  and +11 % for the transformer. The seed is ~9 % of the minGRU forward, not 2.9 %.
+- **Verdicts:** H1 (padding+glue) confirmed; H2 (transformer matches minGRU) refuted by 1.7×;
+  H3 (fusability) only in the sense "one elementwise pass vs five kernels per layer at 3
+  layers" — the 73×-working-set / shared-memory / barrier argument does not bite; H4 (131 k
+  sequences) is a FlashAttention grid limit, not an attention limit. minGRU kernel itself:
+  properly done; the levers left are h=192, the quantile ladder, the Fourier front end.
+- **Paper audit headlines (ICLR_v2 @ d9af0b4):** the method section describes the *Mamba-2*
+  block as the minGRU (class tokens, per-layer RMSNorm, sigmoid gate, residual — the minGRU
+  has none: `in_proj(4H)` + scan, terminal-state readout 384 → 256); the minGRU kernel
+  paragraph describes the Mamba-2 BUCKET16 mechanism; "5.0×/5.1× … transformer gains
+  nothing", "12 launches", "73×", "15 hits", "2.9 % seed", the TF32-training claim and the
+  "0.01 % median deviation" are wrong, stale or unsupported. Recommended table for the paper:
+  minGRU 0.88 → 5.31 (6.0×), transformer 0.48 → 3.18 (6.6×), Mamba-2 0.57 → 1.74 (3.0×).
+
+### 4.42 Inference precision study (2026-09-21 evening, agent run) — Mamba-2 at fp16 passes; exact fp64 quantile ladder = +20 %
+
+Full write-up `docs/PRECISION_STUDY_2026-09-21.md` (precision map measured with forward hooks,
+not read off the code). Headlines:
+- **Mamba-2 fp16**: the old `Expected dtype ['fp32','fp64'] but got fp16` came from Triton's
+  `tl.sigmoid`/`exp` (fp32-only) in `_gated_rmsnorm_kernel` and the projection-row loads, not
+  from the scan; fix = `.to(tl.float32)` on load in `_ssd_short_fwd_kernel2p` and the gated-norm
+  kernel, IEEE dots untouched, output follows input dtype; fp32 path bit-identical (12 saved
+  tensors). Deployed v5pc fp16: **2,062,647 tracks/s** (repeat 2,057,571; 9.4 GiB) vs TF32
+  1,769,196 (+17 %); as-trained v3c 578,568 → **3.57×**. Physics `SSM_baseline_25ep_fp16` vs TF32
+  reference: worst |Δratio| **0.00056**, 58/60 cells identical at 3 decimals, N identical.
+- **minGRU h192 headroom** (reference re-run 5.28 M, spread ≤ 0.9 %): (a) fp16 front end, cast
+  after concat: +1 % only (Inductor emits a separate 1.37 ms `to_copy`); (a′) **sin/cos rounded
+  to fp16 on store** (`fourier_encode(out_dtype=)`): **5.79 M (+10 %)**, worst 0.0007 (53/60
+  identical); (b) fp16 heads: +0 % (`pool_norm`/`pool_proj` are already fp16 — autocast does not
+  promote `rms_norm`); (3) **quantile ladder as fp64 `(N,6)@(6,6)` triangular GEMM
+  (`TRK_QUANTILE_LADDER=matmul`)**: **exact (60/60 identical, ≤ 1 ulp), 6.35 M (+20 %)** — the
+  five `cumsum` scans were 4.37 of the 4.82 ms heads stage; (c) bf16 encoder control: worst
+  **0.0101**, q/p worse at high pT → rejected; a′+b+3: **6.97 M (+32 %)**, 5.6 GiB. The remaining
+  front-end cost (3.5 ms) is the sin/cos arithmetic itself (0.84 G transcendentals), not traffic.
+- Flags (opt-in, defaults unchanged): `TRK_FRONTEND_DTYPE`, `TRK_HEADS_DTYPE` (`model.py`),
+  `TRK_QUANTILE_LADDER=matmul` (`losses.py`, inference only); bench args `--frontend-dtype
+  --heads-dtype --quantile-ladder`; `scripts/compare_rms_summary.py` (cell-by-cell gate);
+  tests +10 in `test_ssd_variants.py`, new `tests/test_precision_flags.py` (50 pass).
+- **Recommendation (agent, endorsed):** make the fp64 ladder the inference default (exact, every
+  encoder, +20 %); the fp16-on-store front end is the user's call (+10 % for a 0.0007 worst cell);
+  skip fp16 heads; keep bf16 out; seed stays fp64. Paper table `tab:kernel-gains` updated to the
+  all-fp16 comparison (minGRU 0.88 → 5.31, transformer 0.48 → 3.18, Mamba-2 0.58 → 2.06); the
+  ladder gain is NOT in the paper numbers pending the user's decision.
+
+### 4.43 Seed-fraction tooling for the Ada (2026-09-22, Markus' TODO "calculate fraction of seed calculation new (on Ada)")
+
+`bench_infer_flat.py --gpu-seed` never printed the seed's share (it only timed the whole
+forward with the seed inside). Added, additive: `--seed-share` (CUDA events around
+`gpu_seed_features` inside the timed loop, printed as ms/batch, µs/track and % of the
+per-batch time) and `scripts/bench_stage_share.py` (the torch.profiler stage split
+seed | front end | encoder | heads that produced the paper's 9 %). Two definitions, both
+now measured on the H100 for the h192 minGRU at fp16: **kernel time** (paper's
+definition) seed 9.8 % at 131k / 11.4 % at 65k; **wall clock incl. launch gaps**
+(`--seed-share`) 11.9 % / 17.1 % (2.66 / 2.16 ms per batch). The gap is the 292 tiny fp64
+seed kernels' launch overhead. Both tools, the trained h192 run dir
+(`minGRU_h192_25ep/`) and instructions were put into the collaborator's share
+`/eos/project/e/end-to-end-colliderml/data/ICLR_retraining_v2/rtx_share/` (README section
+"seed fraction ... on the Ada"). Expect a higher share on the Ada (fewer SMs, weak fp64).

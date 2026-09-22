@@ -29,6 +29,7 @@ and ``.predict(raw_output) → physical_value``.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -195,6 +196,31 @@ class SmoothL1Loss(nn.Module):
         """Convert raw model output to physical value."""
         return _linear_denormalise(raw.squeeze(-1), self.norm_min, self.norm_max)
 
+def _ladder_prefix_sum(deltas: Tensor, owner: nn.Module) -> Tensor:
+    """Prefix sum of the quantile ladder's positive gaps along the last dim.
+
+    Default (``TRK_QUANTILE_LADDER`` unset / ``cumsum``): ``torch.cumsum`` — the
+    training path, unchanged.  ``TRK_QUANTILE_LADDER=matmul`` (inference
+    experiment, docs/PRECISION_STUDY_2026-09-21.md): the same sum as one
+    ``(N, Q-1) @ (Q-1, Q-1)`` upper-triangular product evaluated in float64 and
+    rounded once to the input dtype — the correctly rounded value of the exact
+    sum, so it can differ from cumsum's sequential fp32 rounding by at most one
+    ulp, and float64 keeps it out of TF32 (``TRK_MATMUL_PRECISION=high`` applies
+    to fp32 GEMMs).  torch's scan kernel on a 6-wide row is launch/latency
+    bound; the product is one small GEMM.
+    """
+    if not deltas.is_cuda or os.environ.get("TRK_QUANTILE_LADDER", "cumsum") != "matmul":
+        return torch.cumsum(deltas, dim=-1)
+    n = deltas.shape[-1]
+    tri = getattr(owner, "_ladder_tri", None)
+    if tri is None or tri.device != deltas.device or tri.shape[0] != n:
+        tri = torch.triu(torch.ones(n, n, device=deltas.device, dtype=torch.float64))
+        owner._ladder_tri = tri  # plain attribute, not a buffer: never enters the state_dict
+    if deltas.dtype == torch.float64:
+        return deltas @ tri
+    return (deltas.to(torch.float64) @ tri).to(deltas.dtype)
+
+
 class QuantileLoss(nn.Module):
     """Pinball (quantile / check) loss on normalised physical values.
 
@@ -241,7 +267,7 @@ class QuantileLoss(nn.Module):
             return raw
         base = raw[..., :1]
         deltas = F.softplus(raw[..., 1:]) + self.monotone_eps
-        return torch.cat([base, base + torch.cumsum(deltas, dim=-1)], dim=-1)
+        return torch.cat([base, base + _ladder_prefix_sum(deltas, self)], dim=-1)
 
     def forward(self, pred: Tensor, target: Tensor, sample_weights: Tensor | None = None) -> Tensor:
         """pred: (N, num_quantiles),  target: (N,)."""
@@ -345,7 +371,7 @@ class EtaQuantileLoss(nn.Module):
             return raw
         base = raw[..., :1]
         deltas = F.softplus(raw[..., 1:]) + self.monotone_eps
-        return torch.cat([base, base + torch.cumsum(deltas, dim=-1)], dim=-1)
+        return torch.cat([base, base + _ladder_prefix_sum(deltas, self)], dim=-1)
 
     def forward(self, pred: Tensor, target: Tensor, sample_weights: Tensor | None = None) -> Tensor:
         """pred: (N, num_quantiles),  target: (N,) in θ space."""

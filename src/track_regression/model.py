@@ -93,6 +93,19 @@ class _GradScale(torch.autograd.Function):
         return grad_out * ctx.scale, None
 
 
+def _env_dtype(name: str) -> torch.dtype | None:
+    """Opt-in inference precision flag: ``float16``/``bfloat16`` -> dtype; unset or
+    ``float32`` -> ``None`` (= today's behaviour).  See docs/PRECISION_STUDY_2026-09-21.md."""
+    v = os.environ.get(name, "").strip().lower()
+    if v in ("", "float32", "fp32"):
+        return None
+    if v in ("float16", "fp16", "half"):
+        return torch.float16
+    if v in ("bfloat16", "bf16"):
+        return torch.bfloat16
+    raise ValueError(f"{name}={v!r}: expected float16, bfloat16 or float32")
+
+
 # ============================================================================
 # Fourier encoding
 # ============================================================================
@@ -102,6 +115,7 @@ def fourier_encode(
     x: Tensor,
     fourier_scales: list[int] | None = None,
     fourier_base: int = 3,
+    out_dtype: torch.dtype | None = None,
 ) -> Tensor:
     """Encode input tensor with multi-scale Fourier features.
 
@@ -121,6 +135,9 @@ def fourier_encode(
         fourier_scales = [-3, -2, -1, 0, 1, 2, 3]
     sin = [torch.sin(x / (fourier_base**n)) for n in fourier_scales]
     cos = [torch.cos(x / (fourier_base**n)) for n in fourier_scales]
+    if out_dtype is not None:
+        sin = [t.to(out_dtype) for t in sin]
+        cos = [t.to(out_dtype) for t in cos]
     return torch.cat(sin + cos, dim=-1)
 
 
@@ -296,6 +313,11 @@ class TrackParameterRegressor(nn.Module):
             "float16": torch.float16,
             "float32": torch.float32,
         }[encoder_autocast_dtype]
+        # Opt-in INFERENCE precision experiments (docs/PRECISION_STUDY_2026-09-21.md),
+        # unset = unchanged.  Read once here so the compiled front end specialises
+        # on a plain attribute; the bench sets them via --frontend-dtype/--heads-dtype.
+        self.frontend_dtype = _env_dtype("TRK_FRONTEND_DTYPE")  # Fourier tensor + input-net GEMMs
+        self.heads_dtype = _env_dtype("TRK_HEADS_DTYPE")        # pool_head + output_head GEMMs
 
         # Fourier encoding config
         self.fourier_scales = fourier_scales if fourier_scales is not None else [-3, -2, -1, 0, 1, 2, 3]
@@ -493,8 +515,18 @@ class TrackParameterRegressor(nn.Module):
     def _frontend_eager(self, x: Tensor) -> Tensor:
         """normalise -> (Fourier) -> input_net; the eager front-end (see forward)."""
         x = self._normalise(x)
+        fd = getattr(self, "frontend_dtype", None) if x.is_cuda else None
         if self.fourier_scales:
-            x = fourier_encode(x, self.fourier_scales, self.fourier_base)
+            # TRK_FRONTEND_DTYPE: sin/cos are computed in fp32 and rounded to ``fd`` on
+            # store, so the (n_hits, 480) Fourier tensor is written ONCE in half precision
+            # (measured: a cast after the concat is a separate 1.4 ms pass at 131 k tracks
+            # that Inductor does not fuse into the concat kernel).
+            x = fourier_encode(x, self.fourier_scales, self.fourier_base, out_dtype=fd)
+        if fd is not None:
+            # ... and the input-net GEMMs run in ``fd`` under autocast (fp32 accumulate);
+            # the embedding leaves in ``fd``.  Normalisation stays fp32.
+            with torch.autocast("cuda", dtype=fd):
+                return self.input_net(x.to(fd))
         return self.input_net(x)
 
     def _normalise(self, x: Tensor) -> Tensor:
@@ -633,32 +665,41 @@ class TrackParameterRegressor(nn.Module):
         # 64-true — a hard-coded float32 here broke the fp64 probe run.
         pooled = pooled.to(next(self.output_head.parameters()).dtype)
 
-        if self.pool == "ssm_state":
-            # Split into forward / backward SSM states, project independently.
-            h_fwd = pooled[:, :self.per_dir_dim]
-            h_bwd = pooled[:, self.per_dir_dim:]
-            z_fwd = self.fwd_head(h_fwd)
-            z_bwd = self.bwd_head(h_bwd)
-            z = torch.cat([z_fwd, z_bwd], dim=-1)
-        else:
-            # ssm_cls / register_token — project through pool_head bottleneck.
-            z = self.pool_head(pooled)
-
-        # Final regression output (linear final activation).
-        # Layout: [d0 slice | reg slice].  When separate_d0_head is enabled
-        # d0 is produced by its own parallel branch off `pooled`, so the
-        # DFL gradient on d0 bypasses the shared pool_head + output_head.
-        pred_reg = self.output_head(z)
-        if self.separate_d0_head:
-            if self.d0_grad_scale != 1.0:
-                pooled_for_d0 = _GradScale.apply(pooled, self.d0_grad_scale)
+        # TRK_HEADS_DTYPE (opt-in, inference): run the head GEMMs under autocast in
+        # half precision; the raw outputs are cast back so the quantile decoding
+        # and the anchors in predict_physical stay in the heads' fp32.
+        hd = getattr(self, "heads_dtype", None)
+        heads_ctx = (torch.amp.autocast(device_type="cuda", dtype=hd)
+                     if hd is not None and pooled.is_cuda else nullcontext())
+        with heads_ctx:
+            if self.pool == "ssm_state":
+                # Split into forward / backward SSM states, project independently.
+                h_fwd = pooled[:, :self.per_dir_dim]
+                h_bwd = pooled[:, self.per_dir_dim:]
+                z_fwd = self.fwd_head(h_fwd)
+                z_bwd = self.bwd_head(h_bwd)
+                z = torch.cat([z_fwd, z_bwd], dim=-1)
             else:
-                pooled_for_d0 = pooled
-            z_d0 = self.d0_pool_head(pooled_for_d0)
-            pred_d0 = self.d0_output_head(z_d0)
-            pred = torch.cat([pred_d0, pred_reg], dim=-1)
-        else:
-            pred = pred_reg
+                # ssm_cls / register_token — project through pool_head bottleneck.
+                z = self.pool_head(pooled)
+
+            # Final regression output (linear final activation).
+            # Layout: [d0 slice | reg slice].  When separate_d0_head is enabled
+            # d0 is produced by its own parallel branch off `pooled`, so the
+            # DFL gradient on d0 bypasses the shared pool_head + output_head.
+            pred_reg = self.output_head(z)
+            if self.separate_d0_head:
+                if self.d0_grad_scale != 1.0:
+                    pooled_for_d0 = _GradScale.apply(pooled, self.d0_grad_scale)
+                else:
+                    pooled_for_d0 = pooled
+                z_d0 = self.d0_pool_head(pooled_for_d0)
+                pred_d0 = self.d0_output_head(z_d0)
+                pred = torch.cat([pred_d0, pred_reg], dim=-1)
+            else:
+                pred = pred_reg
+        if hd is not None:
+            pred = pred.to(pooled.dtype)
 
         out = {"pred": pred, "hidden_state": pooled}
         if _auto_seed is not None:

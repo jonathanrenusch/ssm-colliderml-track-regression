@@ -137,3 +137,92 @@ def test_merged_bidi_full_layer_matches_default():
     for a, b, tag in ((f0, f1, "fwd"), (b0, b1, "bwd")):
         err = (a - b).abs().max().item(); scale = a.abs().max().item()
         assert err < 2e-4 * max(scale, 1.0), (tag, err, scale)
+
+
+# ---------------------------------------------------------------------------
+# Reduced-precision activations on the deployment path (2026-09-21): fp16/bf16
+# rows in, fp32 maths in-kernel, output in the input dtype.  Tolerances are set
+# from the measured deviations (fp16 6e-4, bf16 4e-3 relative to max |ref| on
+# this batch; docs/PRECISION_STUDY_2026-09-21.md) with a factor ~3 margin.
+# ---------------------------------------------------------------------------
+
+
+def _rel(a, b):
+    return ((a.float() - b.float()).abs().max() / b.float().abs().max()).item()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("bucket16", [False, True])
+def test_fp16_packed_matches_fp32_reference(reverse, bucket16):
+    env = {"TRK_SSD_BUCKET16": "1"} if bucket16 else {}
+    old = os.environ.pop("TRK_SSD_BUCKET16", None)
+    os.environ.update(env)
+    try:
+        zx, cw, cb, dtb, al, D, cu, lens = _batch()
+        y16 = ssd_short_fwd_packed(zx.half(), cw, cb, dtb, al, D, cu, H, P, N, reverse)
+        ref = _packed_scan_torch_ref(zx, cw, cb, dtb, al, D, cu, H, P, N, reverse)
+    finally:
+        os.environ.pop("TRK_SSD_BUCKET16", None)
+        if old is not None:
+            os.environ["TRK_SSD_BUCKET16"] = old
+    assert y16.dtype == torch.float16, "output dtype must follow the input"
+    assert torch.isfinite(y16).all()
+    assert _rel(y16, ref) < 2e-3, _rel(y16, ref)          # 10 mantissa bits, fp32 accumulate
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bf16_packed_within_bf16_tolerance(reverse):
+    zx, cw, cb, dtb, al, D, cu, _ = _batch()
+    y = ssd_short_fwd_packed(zx.bfloat16(), cw, cb, dtb, al, D, cu, H, P, N, reverse)
+    ref = _packed_scan_torch_ref(zx, cw, cb, dtb, al, D, cu, H, P, N, reverse)
+    assert y.dtype == torch.bfloat16
+    assert _rel(y, ref) < 2e-2, _rel(y, ref)              # 7 mantissa bits
+
+
+def test_fp32_packed_output_stays_fp32():
+    zx, cw, cb, dtb, al, D, cu, _ = _batch()
+    y = ssd_short_fwd_packed(zx, cw, cb, dtb, al, D, cu, H, P, N, False)
+    assert y.dtype == torch.float32
+
+
+def test_gated_rmsnorm_fp16_matches_fp32():
+    from track_regression.ops.ssd_short_triton import gated_rmsnorm
+
+    zx, cw, cb, dtb, al, D, cu, _ = _batch()
+    y32 = ssd_short_fwd_packed(zx, cw, cb, dtb, al, D, cu, H, P, N, False)
+    w = torch.randn(H * P, generator=torch.Generator().manual_seed(5)).cuda()
+    ref = gated_rmsnorm(y32, zx.view(-1, DPROJ), w, 1e-5)
+    out16 = gated_rmsnorm(y32.half(), zx.half().view(-1, DPROJ), w, 1e-5)
+    assert out16.dtype == torch.float16
+    assert _rel(out16, ref) < 2e-3, _rel(out16, ref)
+    # torch oracle of the same maths in fp32
+    g = y32 * torch.nn.functional.silu(zx[:, :H * P])
+    oracle = g * torch.rsqrt(g.square().mean(-1, keepdim=True) + 1e-5) * w
+    assert _rel(ref, oracle) < 1e-5, _rel(ref, oracle)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_full_layer_under_autocast_matches_fp32(dtype):
+    """fused_bidi_scan_packed under encoder autocast: fp16 GEMMs, half rows into
+    the scan and the gated norm, fp16 out_proj -- the v5pc deployment block of
+    the conv-free paper model (d_conv=1)."""
+    import torch.nn as nn
+    from track_regression.mamba_short import Mamba2Short, fused_bidi_scan_packed
+
+    torch.manual_seed(0)
+    layer = nn.Module()
+    layer.forward_mamba = Mamba2Short(d_model=128, d_state=N, d_conv=1, headdim=P).cuda().float()
+    layer.backward_mamba = Mamba2Short(d_model=128, d_state=N, d_conv=1, headdim=P).cuda().float()
+    g = torch.Generator(device="cpu").manual_seed(2)
+    lens = (torch.randint(6, 23, (1024,), generator=g) + 2)
+    cu = torch.zeros(1025, dtype=torch.int64); cu[1:] = torch.cumsum(lens, 0)
+    x = torch.randn(1, int(cu[-1]), 128, generator=g).cuda()
+    cu = cu.cuda()
+    with torch.inference_mode():
+        f32, b32 = fused_bidi_scan_packed(layer, x, cu)
+        with torch.autocast("cuda", dtype=dtype):
+            f_lo, b_lo = fused_bidi_scan_packed(layer, x, cu)
+    assert f_lo.dtype == dtype and b_lo.dtype == dtype
+    tol = 3e-3 if dtype is torch.float16 else 2e-2
+    assert _rel(f_lo, f32) < tol, ("fwd", _rel(f_lo, f32))
+    assert _rel(b_lo, b32) < tol, ("bwd", _rel(b_lo, b32))

@@ -25,6 +25,18 @@ surrounding gate/norm/projection elementwise work around it.
 Padding contract (Scheme A): pads strictly trail.  The kernel additionally
 masks rows >= L_valid via `lmask`, and the decay matrix is masked to the
 valid causal triangle, so pad rows write zeros and contribute nothing.
+
+Reduced-precision activations (inference, 2026-09-21): the deployment path
+(`_ssd_short_fwd_kernel2p` via `ssd_short_fwd_packed`, and
+`_gated_rmsnorm_kernel`) accepts fp16/bf16 rows as well as fp32.  As in
+`ops/mingru_short_triton.py`, every load is converted to fp32 in registers
+(`.to(tl.float32)` -- a no-op for fp32 input, so the fp32 path is unchanged),
+the conv / softplus / decay / both IEEE `tl.dot` calls run in fp32 exactly as
+before, and the store casts back to the storage dtype.  Under
+`encoder_autocast_dtype: float16` the projections then run as fp16 GEMMs and
+the scan reads fp16 directly, without a cast kernel at the boundary.  The
+padded kernels (`_ssd_short_fwd_kernel`, `_ssd_short_fwd_kernel2`) and the
+opt-in merged-bidi kernel stay fp32-typed.
 """
 
 from __future__ import annotations
@@ -416,6 +428,9 @@ def _ssd_short_fwd_kernel2p(
     # Strided masked loads win; keep them.
 
     # ---- shared across heads: conv'd B, C and G, computed once -------------
+    # zxbcdt rows may be fp32, fp16 or bf16 (fp16 encoder autocast): every load
+    # is converted to fp32 in registers, so the arithmetic below is identical
+    # for all three and the fp32 path is bit-for-bit what it was.
     b_acc = tl.zeros((BL, N), dtype=tl.float32)
     c_acc = tl.zeros((BL, N), dtype=tl.float32)
     for k in tl.static_range(DCONV):
@@ -427,9 +442,9 @@ def _ssd_short_fwd_kernel2p(
         wb = tl.load(convw_ptr + (HP + offs_n) * DCONV + k)
         wc = tl.load(convw_ptr + (HP + N + offs_n) * DCONV + k)
         b_acc += wb[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + offs_n)[None, :],
-                                       mask=rmask[:, None], other=0.0)
+                                       mask=rmask[:, None], other=0.0).to(tl.float32)
         c_acc += wc[None, :] * tl.load(zxbcdt_ptr + roff + (XBC_OFF + HP + N + offs_n)[None, :],
-                                       mask=rmask[:, None], other=0.0)
+                                       mask=rmask[:, None], other=0.0).to(tl.float32)
     b_acc += tl.load(convb_ptr + HP + offs_n)[None, :]
     c_acc += tl.load(convb_ptr + HP + N + offs_n)[None, :]
     Bm = b_acc * tl.sigmoid(b_acc)
@@ -458,12 +473,12 @@ def _ssd_short_fwd_kernel2p(
             wx = tl.load(convw_ptr + (h * P + offs_p) * DCONV + k)
             x_acc += wx[None, :] * tl.load(
                 zxbcdt_ptr + roff + (XBC_OFF + h * P + offs_p)[None, :],
-                mask=rmask[:, None], other=0.0)
+                mask=rmask[:, None], other=0.0).to(tl.float32)
         x_acc += tl.load(convb_ptr + h * P + offs_p)[None, :]
         x = x_acc * tl.sigmoid(x_acc)
 
         dt_raw = tl.load(zxbcdt_ptr + (base + dt_row.to(tl.int64)) * DPROJ_TOT + DT_OFF + h,
-                         mask=lmask, other=0.0)
+                         mask=lmask, other=0.0).to(tl.float32)
         v = dt_raw + tl.load(dtb_ptr + h)
         dt = tl.where(v <= 20.0, tl.log(1.0 + tl.exp(v)), v)
         dt = tl.where(lmask, dt, 0.0)
@@ -480,6 +495,9 @@ def _ssd_short_fwd_kernel2p(
         else:
             Y = tl.dot(M, xdt, input_precision="ieee")
         Y += tl.load(d_ptr + h) * x
+        # fp32 Y is cast to the output's storage dtype by the store (fp32 path:
+        # no cast; fp16/bf16: one rounding, the same as the projection's own
+        # output rounding under autocast).
         tl.store(out_row + h * P + offs_p[None, :], Y, mask=lmask[:, None])
 
 
@@ -632,6 +650,11 @@ def ssd_short_fwd_packed_merged(
     d_state: int,
 ) -> torch.Tensor:
     """Both scan directions in ONE launch (TRK_SSD_MERGED_BIDI=1). Returns (2, T_aug, HP)."""
+    # The merged kernel is fp32-typed (it was measured a wash and is not the
+    # deployment path); fp16/bf16 rows go through the default two-launch path.
+    assert zx_fb.dtype in (torch.float32, torch.float64), (
+        f"TRK_SSD_MERGED_BIDI=1 supports fp32 rows only, got {zx_fb.dtype}; unset it under "
+        "encoder_autocast_dtype float16/bfloat16")
     T, dproj2 = zx_fb.shape
     H, P, N = nheads, headdim, d_state
     dproj = dproj2 // 2
@@ -715,9 +738,15 @@ def ssd_short_fwd_packed(
     d_state: int,
     reverse: bool = False,
 ) -> torch.Tensor:
-    """Packed-stream single-chunk SSD scan (pre-norm Y rows, (T_aug, H*P))."""
+    """Packed-stream single-chunk SSD scan (pre-norm Y rows, (T_aug, H*P)).
+
+    ``zxbcdt_rows`` may be fp32, fp16 or bf16; the output follows its dtype
+    while the kernel computes in fp32 regardless (loads are converted in
+    registers).  The weights stay fp32 (they are the module's parameters).
+    """
     T, dproj = zxbcdt_rows.shape
     H, P, N = nheads, headdim, d_state
+    assert zxbcdt_rows.dtype in (torch.float32, torch.float16, torch.bfloat16), zxbcdt_rows.dtype
     w = conv_weight.reshape(conv_weight.shape[0], -1).contiguous()
     zx = zxbcdt_rows.contiguous()
     cu = cu_seqlens_aug.to(device=zx.device, dtype=torch.int64).contiguous()
@@ -769,10 +798,10 @@ def _(zxbcdt_rows, conv_weight, conv_bias, dt_bias, A_log, D, cu_seqlens_aug,
 )
 @triton.jit
 def _gated_rmsnorm_kernel(
-    y_ptr,      # (R, DSSM) fp32 rows
-    z_ptr,      # (R, Z_STRIDE) fp32 — z slice starts the row
-    w_ptr,      # (DSSM,)
-    out_ptr,    # (R, DSSM)
+    y_ptr,      # (R, DSSM) fp32/fp16/bf16 rows (the scan output)
+    z_ptr,      # (R, Z_STRIDE) same dtype as the projection — z slice starts the row
+    w_ptr,      # (DSSM,) fp32 parameter
+    out_ptr,    # (R, DSSM) same dtype as y
     Z_STRIDE,   # row stride of the z tensor (d_in_proj when z is a view)
     EPS,
     DSSM: tl.constexpr,
@@ -781,12 +810,14 @@ def _gated_rmsnorm_kernel(
     row = tl.program_id(0).to(tl.int64)
     offs = tl.arange(0, DBLK)
     cmask = offs < DSSM
-    y = tl.load(y_ptr + row * DSSM + offs, mask=cmask, other=0.0)
-    z = tl.load(z_ptr + row * Z_STRIDE + offs, mask=cmask, other=0.0)
+    # Convert on load: Triton's exp/sqrt are fp32/fp64-only, and the gate,
+    # the mean square and the rsqrt must not run in half precision anyway.
+    y = tl.load(y_ptr + row * DSSM + offs, mask=cmask, other=0.0).to(tl.float32)
+    z = tl.load(z_ptr + row * Z_STRIDE + offs, mask=cmask, other=0.0).to(tl.float32)
     g = y * (z * tl.sigmoid(z))
     ms = tl.sum(g * g, 0) / DSSM
     rstd = 1.0 / tl.sqrt(ms + EPS)
-    w = tl.load(w_ptr + offs, mask=cmask, other=0.0)
+    w = tl.load(w_ptr + offs, mask=cmask, other=0.0).to(tl.float32)
     tl.store(out_ptr + row * DSSM + offs, g * rstd * w, mask=cmask)
 
 
@@ -800,9 +831,13 @@ def gated_rmsnorm(y: torch.Tensor, z_rows: torch.Tensor, weight: torch.Tensor,
     slice copy is ever materialised.  A column-sliced VIEW with unit inner
     stride is also accepted (merged-bidi path): the row stride is passed to
     the kernel and the view's storage offset rides on ``data_ptr``.
+
+    ``y``/``z_rows`` may be fp16 or bf16 (fp16 encoder autocast); the maths is
+    fp32 in-kernel and the output follows ``y``'s dtype.
     """
     d = y.shape[-1]
     assert y.is_contiguous() and z_rows.stride(-1) == 1
+    assert y.dtype in (torch.float32, torch.float64, torch.float16, torch.bfloat16), y.dtype
     y2 = y.view(-1, d)
     assert z_rows.shape[0] == y2.shape[0]
     out = torch.empty_like(y2)
