@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write matched_residuals.npz per dataset: truth, network ("SSM") and
+"""Write matched_residuals.npz per dataset: truth, network (key "ssm") and
 truth-seeded KF ("kf") perigee parameters on the double-matched tracks.
 
 The subset is the one fast_rms_eval.py uses (CKF-matched and truth-KF fitted),

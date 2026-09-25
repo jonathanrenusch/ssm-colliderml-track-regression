@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Residual histograms, network ("SSM") vs truth-seeded KF.
+"""Residual histograms, network vs truth-seeded KF.
 
 Reads ``<bundle_dir>/matched_residuals.npz`` (from build_residuals.py) and
 writes ``<dataset>_truthkf__residual_hist_liny.pdf`` next to it: a 2x3 grid
@@ -62,12 +62,12 @@ def load(bundle: Path, eta_max: float) -> dict:
     return res
 
 
-def residual_hist_page(res: dict, out_dir: Path, dataset: str) -> Path:
+def residual_hist_page(res: dict, out_dir: Path, dataset: str, label: str = "minGRU") -> Path:
     fig, axes = make_grid()
     for i, p in enumerate(PARAMS):
         ax = axes[i]
         scale, unit = SCALE[p], UNIT[p]
-        for arr, colour, tag in ((res[f"ssm_{p}"], "C0", "SSM"),
+        for arr, colour, tag in ((res[f"ssm_{p}"], "C0", label),
                                  (res[f"ref_{p}"], "C3", REF)):
             cut = iterative_rms_convergence(arr)
             rms3, kept = cut["rms"], cut["n_kept"]
@@ -90,7 +90,7 @@ def residual_hist_page(res: dict, out_dir: Path, dataset: str) -> Path:
     fig.suptitle(f"{dataset}_truthkf — residuals (iterative-3σ clip in the legends) — "
                  f"total $N={res['count']:,}$ tracks fitted by both\n"
                  f"reference = truth-tracking KF shipped with the dataset (truth_tracks); "
-                 f"SSM on the same double-matched tracks of the v2 evaluation store", y=1.05)
+                 f"{label} on the same double-matched tracks of the v2 evaluation store", y=1.05)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     out = out_dir / f"{dataset}_truthkf__residual_hist_liny.pdf"
     fig.savefig(out)
@@ -104,9 +104,10 @@ def main():
     ap.add_argument("bundle_dir", type=Path, help="directory holding matched_residuals.npz")
     ap.add_argument("dataset", help="dataset name (title and file stem)")
     ap.add_argument("--eta-max", type=float, default=2.0, help="|truth eta| cut (default 2)")
+    ap.add_argument("--label", default="minGRU", help="legend label of the network (default minGRU)")
     a = ap.parse_args()
     res = load(a.bundle_dir, a.eta_max)
-    out = residual_hist_page(res, a.bundle_dir, a.dataset)
+    out = residual_hist_page(res, a.bundle_dir, a.dataset, a.label)
     print(f"[residual-hist] {out}", flush=True)
 
 

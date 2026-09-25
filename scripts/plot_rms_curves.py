@@ -6,7 +6,7 @@ writes, next to it,
   * ``<dataset>_truthkf__rmscurve_vs_eta.pdf``, and with ``--with-pt``
   * ``<dataset>_truthkf__rmscurve_vs_pt.pdf``.
 
-Per figure: one panel per perigee parameter with an SSM / truth-KF ratio strip
+Per figure: one panel per perigee parameter with an network / truth-KF ratio strip
 underneath, and a 6th panel with the distribution of the binning variable.
 Bands are the analytic standard error of the clipped RMS, RMS / sqrt(2 N_kept).
 Each legend entry quotes the unbinned clipped RMS and the fraction of tracks
@@ -40,7 +40,7 @@ REF = "truth-KF"         # legend label of the reference fit
 MATH = {"d0": r"$d_0$", "z0": r"$z_0$", "phi": r"$\varphi$", "theta": r"$\theta$", "qop": r"$q/p$"}
 UNIT = {"d0": "µm", "z0": "µm", "phi": "mrad", "theta": "mrad", "qop": "$10^{-3}$/GeV"}
 SCALE = {"d0": 1e3, "z0": 1e3, "phi": 1e3, "theta": 1e3, "qop": 1e3}
-COL = {"SSM": "C0", REF: "C3"}
+NET_COLOUR, REF_COLOUR = "C0", "C3"
 ALPHA = 0.25
 
 
@@ -87,7 +87,7 @@ def _curve(resid, xvar, edges):
     return np.array(cen), np.array(val), np.array(err)
 
 
-def draw(bundle: Path, ds: str, with_pt: bool, eta_max: float, pt_max: float):
+def draw(bundle: Path, ds: str, with_pt: bool, eta_max: float, pt_max: float, label: str = "minGRU"):
     z = np.load(bundle / "matched_residuals.npz")
     truth, ssm, kf = z["truth"], z["ssm"], z["kf"]
     both = np.isfinite(ssm[:, 0]) & np.isfinite(kf[:, 0])
@@ -122,14 +122,14 @@ def draw(bundle: Path, ds: str, with_pt: bool, eta_max: float, pt_max: float):
             if p == "phi":
                 rs, rk = _wrap(rs), _wrap(rk)
             curves = {}
-            for lab, resid in (("SSM", rs), (REF, rk)):
+            for lab, resid, colour in ((label, rs, NET_COLOUR), (REF, rk, REF_COLOUR)):
                 c, v, e = _curve(resid, xv, edges)
                 curves[lab] = (c, v * sc, e * sc)
                 urms, uk, un = _clip_rms(resid)
                 note = f"({100 * (un - uk) / max(un, 1):.1f}% clipped)"
-                ax.plot(c, v * sc, "-", color=COL[lab], lw=1.8,
+                ax.plot(c, v * sc, "-", color=colour, lw=1.8,
                         label=f"{lab}: {urms*sc:.3g} {UNIT[p]}\n{note}")
-                ax.fill_between(c, (v - e) * sc, (v + e) * sc, color=COL[lab], alpha=ALPHA, lw=0)
+                ax.fill_between(c, (v - e) * sc, (v + e) * sc, color=colour, alpha=ALPHA, lw=0)
             ax.set_ylabel(f"iter-3$\\sigma$ RMS({MATH[p]}) [{UNIT[p]}]", fontsize=9)
             ax.set_title(MATH[p])
             # y range: anchor at 0 only when the curves span a wide range; a
@@ -144,7 +144,7 @@ def draw(bundle: Path, ds: str, with_pt: bool, eta_max: float, pt_max: float):
                 ax.set_ylim(bottom=0)
             ax.legend(loc="best", fontsize=6.6, framealpha=0.9,
                       handlelength=1.2, borderpad=0.25, labelspacing=0.2)
-            cs, vs, es = curves["SSM"]; ck, vk, ek = curves[REF]
+            cs, vs, es = curves[label]; ck, vk, ek = curves[REF]
             common, a, bxi = np.intersect1d(cs, ck, return_indices=True)
             if common.size:
                 r = vs[a] / vk[bxi]
@@ -152,7 +152,7 @@ def draw(bundle: Path, ds: str, with_pt: bool, eta_max: float, pt_max: float):
                 axr.axhline(1.0, color="0.4", lw=0.8, ls=":")
                 axr.plot(common, r, "-", color="C0", lw=1.4)
                 axr.fill_between(common, r - re, r + re, color="C0", alpha=ALPHA, lw=0)
-            axr.set_ylabel(f"SSM/{REF}", fontsize=8); axr.set_xlabel(xlabel)
+            axr.set_ylabel(f"{label}/{REF}", fontsize=8); axr.set_xlabel(xlabel)
             # no tick label at the strip's top: it would collide with the main panel's
             axr.yaxis.set_major_locator(MaxNLocator(nbins=4, prune="upper"))
             if vname == "eta":
@@ -185,5 +185,6 @@ if __name__ == "__main__":
     ap.add_argument("--eta-max", type=float, default=2.0, help="|truth eta| cut (default 2)")
     ap.add_argument("--pt-max", type=float, default=70.0,
                     help="pT cap [GeV] of the vs-pT page (default 70; 'inf' for none)")
+    ap.add_argument("--label", default="minGRU", help="legend label of the network (default minGRU)")
     a = ap.parse_args()
-    draw(a.bundle_dir, a.dataset, a.with_pt, a.eta_max, a.pt_max)
+    draw(a.bundle_dir, a.dataset, a.with_pt, a.eta_max, a.pt_max, a.label)

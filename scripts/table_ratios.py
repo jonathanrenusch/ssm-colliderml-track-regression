@@ -60,7 +60,7 @@ def _fmt(val: float, err: float | None) -> str:
 
 
 def load_residuals(npz: Path, ds: str, eta_max: float, pt_max: float):
-    """-> (SSM residuals, KF residuals) as lists over the five parameters, after the cuts."""
+    """-> (network residuals, KF residuals) as lists over the five parameters, after the cuts."""
     d = np.load(npz)
     truth, ssm, kf = d["truth"], d["ssm"], d["kf"]
     theta = truth[:, 3]

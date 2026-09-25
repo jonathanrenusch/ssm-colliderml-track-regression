@@ -2,7 +2,7 @@
 """Per-dataset resolution summary of the network predictions vs the reference fit.
 
 For every ``<dataset>.h5`` in ``--pred-dir`` (written by ``scripts/predict.py``)
-this reads the matching evaluation store ``<store-root>/<dataset>/test`` and compares the network (labelled "SSM") with
+this reads the matching evaluation store ``<store-root>/<dataset>/test`` and compares the network (labelled by --label) with
 the reference fit on the double-matched (DM) tracks: tracks matched by the
 ACTS combinatorial KF (CKF) and fitted by the truth-seeded KF (truth-KF).
 The truth-KF is the reference whenever the store carries its side-car
@@ -13,7 +13,7 @@ Outputs in ``--out-dir``:
     iterative-3-sigma-clipped, plus the fraction of tracks the clip removed;
   * ``rms_by_pt.txt`` -- the clipped RMSE per pT bin;
   * ``<dataset>__rms_vs_eta_summary{,_logy,_preclip,_postclip}.pdf`` -- RMSE vs
-    eta, 2x3 grid (five parameters + the eta distribution), SSM in C0, the
+    eta, 2x3 grid (five parameters + the eta distribution), network in C0, the
     reference in C3, solid = iter-3-sigma, dashed = pre-clip.
 
 Only tracks with |truth eta| <= ``--eta-max`` enter (default 2, the paper's
@@ -80,7 +80,7 @@ def _wrap(x):
 
 
 def build_residuals(h5_path: Path, store_dir: Path, eta_max: float) -> dict:
-    """SSM and reference residuals over the DM subset inside |eta| <= eta_max."""
+    """Network and reference residuals over the DM subset inside |eta| <= eta_max."""
     with h5py.File(h5_path, "r") as f:
         preds = {p: f["preds"][p][:] for p in PARAMS}
         targets = {p: f["targets"][p][:] for p in PARAMS}
@@ -185,18 +185,21 @@ def _draw(ax, eta, ssm, ref, p, eta_edges, *, mode):
     ax.set_title(p)
 
 
+NET = "minGRU"   # network label in tables and legends (--label)
+
+
 def _legend_handles(mode, ref_name):
     if mode == "both":
         h = [Line2D([0], [0], color="C0", lw=1.8),
              Line2D([0], [0], color="C0", lw=1.0, ls="--", alpha=0.7),
              Line2D([0], [0], color="C3", lw=1.8),
              Line2D([0], [0], color="C3", lw=1.0, ls="--", alpha=0.7)]
-        l = ["SSM (iter-3σ)", "SSM (pre-clip)",
+        l = [f"{NET} (iter-3σ)", f"{NET} (pre-clip)",
              f"{ref_name} (iter-3σ)", f"{ref_name} (pre-clip)"]
         return h, l
     label = "iter-3σ" if mode == "postclip" else "pre-clip"
     h = [Line2D([0], [0], color="C0", lw=1.8), Line2D([0], [0], color="C3", lw=1.8)]
-    return h, [f"SSM ({label})", f"{ref_name} ({label})"]
+    return h, [f"{NET} ({label})", f"{ref_name} ({label})"]
 
 
 MODES = [
@@ -243,10 +246,10 @@ PT_EDGES = np.array([0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0, 110.0, np.inf])
 
 
 def pt_bin_table(res: dict, ds: str) -> list[str]:
-    """iter-3-sigma RMSE per pT bin, SSM / reference, all five parameters."""
+    """iter-3-sigma RMSE per pT bin, network / reference, all five parameters."""
     pt = res["pt"]
     idx = np.clip(np.digitize(pt, PT_EDGES) - 1, 0, len(PT_EDGES) - 2)
-    lines = [f"{ds} — iter-3sigma RMSE per pT bin, SSM / {res['ref_name']}",
+    lines = [f"{ds} — iter-3sigma RMSE per pT bin, {NET} / {res['ref_name']}",
              f"{'pT [GeV]':>12s} {'N':>9s} " + " ".join(f"{p + ' ' + DISPLAY_UNIT[p]:>22s}" for p in PARAMS)]
     for b in range(len(PT_EDGES) - 1):
         m = idx == b
@@ -289,7 +292,10 @@ def main():
     ap.add_argument("--datasets", nargs="*", default=None, help="default: every .h5 in --pred-dir")
     ap.add_argument("--subtitle", default="", help="second title line of the figures")
     ap.add_argument("--eta-max", type=float, default=2.0, help="fiducial |truth eta| cut (default 2)")
+    ap.add_argument("--label", default="minGRU", help="name of the network in tables and legends")
     a = ap.parse_args()
+    global NET
+    NET = a.label
 
     apply_paper_style()
     pred_dir, root, out = Path(a.pred_dir), Path(a.store_root), Path(a.out_dir)
@@ -314,17 +320,17 @@ def main():
     (out / "rms_summary.json").write_text(json.dumps(table, indent=1))
     lines = [f"{'dataset':22s} {'N_dm':>10s} {'reference':>9s} " + " ".join(f"{p:>22s}" for p in PARAMS),
              f"{'':22s} {'':>10s} {'':>9s} " + " ".join(
-                 f"{'SSM/ref ' + DISPLAY_UNIT[p]:>22s}" for p in PARAMS)]
+                 f"{NET + '/ref ' + DISPLAY_UNIT[p]:>22s}" for p in PARAMS)]
     for ds, r in table.items():
         lines.append(f"{ds:22s} {r['n_dm']:>10,d} {r['ref_name']:>9s} " + " ".join(
             f"{_fmt(r[p + '_ssm_post']) + '/' + _fmt(r[p + '_ref_post']):>22s}" for p in PARAMS))
-    lines += ["", "SSM tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed",
+    lines += ["", f"{NET} tails: pre-clip / iter-3sigma ratio, and % of tracks the clip removed",
               f"{'dataset':22s} " + " ".join(f"{p:>18s}" for p in PARAMS)]
     for ds, r in table.items():
         lines.append(f"{ds:22s} " + " ".join(
             f"{_fmt(r[p + '_ssm_tail_ratio']) + 'x / ' + format(r[p + '_ssm_clipped_pct'], '.2f') + '%':>18s}"
             for p in PARAMS))
-    txt = f"iter-3sigma RMSE, SSM / reference, |eta| <= {a.eta_max:g}\n" + "\n".join(lines) + "\n"
+    txt = f"iter-3sigma RMSE, {NET} / reference, |eta| <= {a.eta_max:g}\n" + "\n".join(lines) + "\n"
     (out / "rms_summary.txt").write_text(txt)
     (out / "rms_by_pt.txt").write_text("\n".join(pt_lines))
     print("\n" + txt)

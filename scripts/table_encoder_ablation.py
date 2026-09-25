@@ -36,7 +36,7 @@ ETA_MAX, PT_MAX = 2.0, 70.0
 
 
 def load(bundle: Path, ds: str):
-    """-> list of (SSM residual, KF residual) per parameter, and the track count."""
+    """-> list of (network residual, KF residual) per parameter, and the track count."""
     res_s, res_k, n = load_residuals(bundle / ds / "matched_residuals.npz", ds, ETA_MAX, PT_MAX)
     return list(zip(res_s, res_k)), n
 
