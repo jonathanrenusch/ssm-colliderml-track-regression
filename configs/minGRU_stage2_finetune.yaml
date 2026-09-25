@@ -1,0 +1,92 @@
+# Paper model, stage 2: fine-tune of minGRU_stage1 with the Muon-AdamW hybrid (tail cleaner).
+#
+#   python -m track_regression.train fit --config configs/minGRU_stage2_finetune.yaml
+#
+# Starts from the stage-1 last.ckpt (fresh optimiser and schedule); 50 epochs,
+# DDP on 2 GPUs x 20 000 tracks per batch.
+seed_everything: 42
+
+trainer:
+  accelerator: gpu
+  devices: 2
+  strategy: ddp
+  precision: 32-true            # strict fp32 (train.py also disables TF32)
+  max_epochs: 50
+  gradient_clip_val: 1.0
+  benchmark: true
+  use_distributed_sampler: false          # the block sampler shards across ranks itself
+  reload_dataloaders_every_n_epochs: 1    # re-shuffles the block order every epoch
+  num_sanity_val_steps: 1
+  log_every_n_steps: 500
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: runs
+      name: minGRU_stage2_finetune
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val/total
+        mode: min
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 500
+
+model:
+  optimizer: MuonHybrid
+  lrs_config:
+    schedule: wsd                # warm-up 5 %, constant, cosine decay over the last 50 %
+    initial: 2.0e-06
+    max: 2.0e-05                 # AdamW groups
+    end: 1.0e-06
+    pct_start: 0.05
+    decay_pct: 0.5
+    weight_decay: 0.02
+    betas: [0.9, 0.95]
+    muon_max: 6.0e-05            # Muon groups (2-D encoder matrices)
+    muon_weight_decay: 0.0
+    muon_momentum: 0.95
+    muon_ns_steps: 5
+  pretrained_ckpt_path: runs/minGRU_stage1/version_0/checkpoints/last.ckpt
+  model:
+    class_path: track_regression.model.TrackParameterRegressor
+    init_args:
+      input_dim: 15             # 12 measured hit features + 3 residuals to the seed helix
+      dim: 128
+      encoder:
+        class_path: track_regression.mingru.MinGRUCLSEncoder
+        init_args: {dim: 128, hidden_size: 192, num_layers: 2, pool_out_dim: 256}
+      input_net_hidden_layers: [128]
+      pool_head_dim: 128
+      pool_head_hidden_layers: [128]
+      output_head_hidden_layers: [128]
+      fourier_scales: [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+      fourier_base: 2
+      # min-max bounds of the 15 hit features: x, y, z, r [mm], phi_hit, theta_hit,
+      # s [mm], volume_id, layer_id, surface_id, detector, eta_hit, asinh du, asinh dv, s_helix [mm]
+      norm_min: [-1031.0, -1031.0, -3026.0, 31.0, -3.1416, 0.027, 31.0, 16.0, 2.0, 1.0, 0.0, -4.3, -8.0, -8.0, 0.0]
+      norm_max: [1031.0, 1031.0, 3026.0, 1032.0, 3.1416, 3.114, 3185.0, 30.0, 16.0, 3360.0, 8.0, 4.3, 8.0, 8.0, 4096.0]
+      encoder_autocast_dtype: float32
+      output_head_init_scale: 0.01
+      loss_module:
+        class_path: track_regression.losses.TrackParameterLoss
+        init_args:
+          # seed-anchored 7-quantile pinball heads; q/p uses the scale-free
+          # residual (q/p - seed) / (|seed| + 0.02)
+          config:
+            d0:    {norm_min: -0.4,   norm_max: 0.4,   delta_anchor: seed_d0,    quantiles: &q [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]}
+            z0:    {norm_min: -3.5,   norm_max: 3.5,   delta_anchor: seed_z0,    quantiles: *q}
+            phi:   {norm_min: -0.015, norm_max: 0.015, delta_anchor: seed_phi,   quantiles: *q}
+            theta: {norm_min: -0.01,  norm_max: 0.01,  delta_anchor: seed_theta, quantiles: *q}
+            qop:   {norm_min: -2.0,   norm_max: 2.0,   delta_anchor: seed_qop,   scale_anchor_eps: 0.02, quantiles: *q}
+
+data:
+  preprocessed_dir: data/stores/mix3
+  batch_size: 20000
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  seed_residual_features: true
+  max_val_tracks: 1000000

@@ -1,7 +1,7 @@
-# ruff: noqa: F401
-"""ColliderML track parameter regression experiment.
+"""Seed-guided bidirectional sequence models for charged-particle track fitting."""
 
-This experiment performs track parameter regression (d0, z0, phi, theta, qop)
-using a bidirectional Mamba2 state space model encoder with direct hidden state
-extraction from the final SSM layer.
-"""
+import os
+
+# torch.compile's parallel compile-worker pool can block interpreter exit for
+# minutes; compile in-process instead (numerically irrelevant).
+os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
