@@ -41,6 +41,11 @@ filter fits shipped with the data as the reference), and `data/eval/ttbar_bench`
 
 Stage 1 runs on one GPU (~30 h on an H100), stage 2 on two GPUs (~15 h).
 Training is strict fp32.
+On the public data release (post 2026-09-12 digitization fix) stage 1 weights the q/p
+loss x10 and uses Lion weight decay 0.1 (`configs/minGRU_stage1.yaml`); with the
+pre-fix values (1 / 0.001) the q/p head is starved under Lion on this sharper detector
+(q/p 40-80 % worse than the truth-KF after stage 1) and the weights grow until fp16
+inference overflows.
 
 ```bash
 python -m track_regression.train fit --config configs/minGRU_stage1.yaml

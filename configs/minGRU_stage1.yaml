@@ -3,6 +3,13 @@
 #   python -m track_regression.train fit --config configs/minGRU_stage1.yaml
 #
 # Stage 1: Lion, one-cycle schedule, batch 2048, 25 epochs on one GPU.
+#
+# Recipe for the public ColliderML release (post 2026-09-12 digitization fix), 2026-11-16:
+# q/p loss weight 10 and Lion weight decay 0.1.  With the pre-fix-era values (1 / 0.001)
+# the q/p term is ~4 % of the summed loss and, under Lion's sign-of-the-sum update, never
+# steers the shared trunk on this sharper detector: q/p ends 40-80 % worse than the
+# truth-seeded KF while the weights grow until fp16 inference overflows.  With this recipe
+# stage 1 alone reaches q/p 0.98 / 0.97 / 0.99 / 0.98 of the truth-KF (2 / 10 / 50 / 1-70 GeV).
 seed_everything: 42
 
 trainer:
@@ -40,7 +47,7 @@ model:
     max: 5.0e-05
     end: 1.0e-06
     pct_start: 0.1
-    weight_decay: 0.001
+    weight_decay: 0.1
   model:
     class_path: track_regression.model.TrackParameterRegressor
     init_args:
@@ -71,7 +78,7 @@ model:
             z0:    {norm_min: -3.5,   norm_max: 3.5,   delta_anchor: seed_z0,    quantiles: *q}
             phi:   {norm_min: -0.015, norm_max: 0.015, delta_anchor: seed_phi,   quantiles: *q}
             theta: {norm_min: -0.01,  norm_max: 0.01,  delta_anchor: seed_theta, quantiles: *q}
-            qop:   {norm_min: -2.0,   norm_max: 2.0,   delta_anchor: seed_qop,   scale_anchor_eps: 0.02, quantiles: *q}
+            qop:   {norm_min: -2.0,   norm_max: 2.0,   delta_anchor: seed_qop,   scale_anchor_eps: 0.02, quantiles: *q, weight: 10.0}
 
 data:
   preprocessed_dir: data/stores/mix3
