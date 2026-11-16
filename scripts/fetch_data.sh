@@ -38,8 +38,10 @@ fetch_one () {
 }
 export -f list_dir fetch_one; export URL RAW DS
 
-LIST=$(mktemp); LOG=$(mktemp)
-echo "$DIRS" | xargs -P "$PAR" -I{} bash -c 'list_dir {}' > "$LIST"
+LIST=$(mktemp); LOG=$(mktemp); LISTDIR=$(mktemp -d); export LISTDIR
+# one output file per directory: parallel writers sharing one file interleave mid-line
+echo "$DIRS" | xargs -P "$PAR" -I{} bash -c 'list_dir {} > "$LISTDIR/$(echo {} | tr / _)"'
+cat "$LISTDIR"/* > "$LIST"; rm -rf "$LISTDIR"
 n_dirs=$(echo "$DIRS" | wc -l); n_listed=$(cut -d' ' -f1 "$LIST" | sort -u | wc -l)
 echo "$DS: $(wc -l < "$LIST") files in $n_listed of $n_dirs table directories -> $RAW/$DS ($PAR streams)"
 xargs -r -P "$PAR" -n 2 bash -c 'fetch_one "$0" "$1"' < "$LIST" | tee "$LOG"
